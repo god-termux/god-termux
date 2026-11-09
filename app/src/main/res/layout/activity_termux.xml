@@ -141,22 +141,19 @@
             android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="37.5dp"
-            android:layout_marginStart="22dp"
-            android:layout_marginEnd="22dp"
             android:background="@color/black"
             android:layout_alignParentBottom="true" />
 
         <!-- god-termux: arrows to flip the toolbar pages (macros | extra keys | text input) instead of laggy swipes -->
         <ImageView
             android:id="@+id/toolbar_arrow_left"
-            android:layout_width="22dp"
-            android:layout_height="wrap_content"
-            android:layout_alignTop="@id/terminal_toolbar_view_pager"
+            android:layout_width="34dp"
+            android:layout_height="112dp"
             android:layout_alignBottom="@id/terminal_toolbar_view_pager"
             android:layout_alignParentStart="true"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/god_handle_bg"
             android:contentDescription="Previous panel"
-            android:padding="3dp"
+            android:padding="4dp"
             android:scaleType="centerInside"
             android:src="@drawable/god_ic_chevron_left"
             android:visibility="gone"
@@ -164,12 +161,11 @@
 
         <ImageView
             android:id="@+id/toolbar_arrow_right"
-            android:layout_width="22dp"
-            android:layout_height="wrap_content"
-            android:layout_alignTop="@id/terminal_toolbar_view_pager"
+            android:layout_width="34dp"
+            android:layout_height="112dp"
             android:layout_alignBottom="@id/terminal_toolbar_view_pager"
             android:layout_alignParentEnd="true"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/god_handle_bg_right"
             android:contentDescription="Next panel"
             android:padding="3dp"
             android:scaleType="centerInside"

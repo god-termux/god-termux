@@ -530,6 +530,19 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         setupToolbarPager(terminalToolbarViewPager);
     }
 
+    private com.termux.mod.macros.RadialGesture mRadialGesture;
+
+    /** god-termux: tap, tap, tap-and-hold on the terminal opens a radial menu with macros. */
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        if (mRadialGesture == null) mRadialGesture = new com.termux.mod.macros.RadialGesture(this);
+        if (mRadialGesture.onTouch(ev)) return true;
+        return super.dispatchTouchEvent(ev);
+    }
+
+    /** Lets RadialGesture cancel the touch that the terminal view already started receiving. */
+    public boolean godSuperDispatch(android.view.MotionEvent ev) { return super.dispatchTouchEvent(ev); }
+
     /** god-termux: three toolbar pages (macros | extra keys | text input), extra keys by default, arrows to flip pages. */
     private void setupToolbarPager(final ViewPager pager) {
         pager.setOffscreenPageLimit(2);
