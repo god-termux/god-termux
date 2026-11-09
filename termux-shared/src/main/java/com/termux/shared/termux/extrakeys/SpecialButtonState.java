@@ -46,6 +46,10 @@ public class SpecialButtonState {
     /** Set {@link #isLocked}. */
     public void setIsLocked(boolean value) {
         isLocked = value;
+        for (MaterialButton button : buttons) {   // god-termux: locked/held modifiers are underlined
+            int f = button.getPaintFlags();
+            button.setPaintFlags(value ? (f | android.graphics.Paint.UNDERLINE_TEXT_FLAG) : (f & ~android.graphics.Paint.UNDERLINE_TEXT_FLAG));
+        }
     }
 
 }

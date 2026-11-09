@@ -21,6 +21,7 @@ import java.util.stream.Collectors;
 
 import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
+import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -205,6 +206,19 @@ public final class ExtraKeysView extends GridLayout {
 
     protected ScheduledExecutorService mScheduledExecutor;
     protected Handler mHandler;
+
+    /** god-termux: special button (CTRL/ALT/SHIFT/FN) currently held down by a finger (long press = momentary hold). */
+    protected SpecialButtonState mHeldState;
+    protected String mHeldKey;
+    /** god-termux: last tapped special button, used to detect a double tap (= lock until tapped again). */
+    protected String mLastTapKey;
+    protected long mLastTapTime;
+    protected static final long DOUBLE_TAP_MS = 320;
+
+    protected void releaseHeld() {
+        if (mHeldState != null) { mHeldState.setIsLocked(false); mHeldState.setIsActive(false); }
+        mHeldState = null; mHeldKey = null;
+    }
     protected SpecialButtonsLongHoldRunnable mSpecialButtonsLongHoldRunnable;
     protected int mLongPressCount;
 
@@ -444,11 +458,15 @@ public final class ExtraKeysView extends GridLayout {
 
                         case MotionEvent.ACTION_CANCEL:
                             view.setBackgroundColor(mButtonBackgroundColor);
+                            if (mHeldKey != null && mHeldKey.equals(buttonInfo.getKey())) releaseHeld();
                             stopScheduledExecutors();
                             return true;
 
                         case MotionEvent.ACTION_UP:
                             view.setBackgroundColor(mButtonBackgroundColor);
+                            if (mHeldKey != null && mHeldKey.equals(buttonInfo.getKey())) {   // finger lifted: release the held modifier, no click
+                                releaseHeld(); stopScheduledExecutors(); return true;
+                            }
                             stopScheduledExecutors();
                             // If ACTION_UP up was not from a repetitive key or was with a key with a popup button
                             if (mLongPressCount == 0 || mPopupWindow != null) {
@@ -522,6 +540,12 @@ public final class ExtraKeysView extends GridLayout {
             SpecialButtonState state = mSpecialButtons.get(SpecialButton.valueOf(buttonInfo.getKey()));
             if (state == null) return;
 
+            // god-termux: double tap locks the modifier ("wait for the next key") until it is tapped again
+            long now = SystemClock.uptimeMillis();
+            boolean doubleTap = buttonInfo.getKey().equals(mLastTapKey) && now - mLastTapTime <= DOUBLE_TAP_MS;
+            mLastTapKey = buttonInfo.getKey(); mLastTapTime = now;
+            if (doubleTap) { mLastTapKey = null; state.setIsActive(true); state.setIsLocked(true); return; }
+
             // Toggle active state and disable lock state if new state is not active
             state.setIsActive(!state.isActive);
             if (!state.isActive)
@@ -552,7 +576,7 @@ public final class ExtraKeysView extends GridLayout {
             if (state == null) return;
             if (mHandler == null)
                 mHandler = new Handler(Looper.getMainLooper());
-            mSpecialButtonsLongHoldRunnable = new SpecialButtonsLongHoldRunnable(state);
+            mSpecialButtonsLongHoldRunnable = new SpecialButtonsLongHoldRunnable(state, buttonInfo.getKey());
             mHandler.postDelayed(mSpecialButtonsLongHoldRunnable, mLongPressTimeout);
         }
     }
@@ -572,14 +596,19 @@ public final class ExtraKeysView extends GridLayout {
     public class SpecialButtonsLongHoldRunnable implements Runnable {
         public final SpecialButtonState mState;
 
-        public SpecialButtonsLongHoldRunnable(SpecialButtonState state) {
+        public final String mHeldButtonKey;
+
+        public SpecialButtonsLongHoldRunnable(SpecialButtonState state, String key) {
             mState = state;
+            mHeldButtonKey = key;
         }
 
         public void run() {
-            // Toggle active and lock state
-            mState.setIsLocked(!mState.isActive);
-            mState.setIsActive(!mState.isActive);
+            // god-termux: hold - the modifier stays pressed while the finger is down (locked only until release)
+            mState.setIsActive(true);
+            mState.setIsLocked(true);
+            mHeldState = mState;
+            mHeldKey = mHeldButtonKey;
             mLongPressCount++;
         }
     }

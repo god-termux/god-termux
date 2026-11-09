@@ -4,50 +4,106 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.*;
 import com.termux.app.TermuxActivity;
 import godui.Ui;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Right-hand drawer with user buttons (macros) and the dialogs to create/edit them. */
+/** Bottom toolbar page with user buttons (macros) and the dialogs to create/edit them. */
 public final class MacroPanel {
-    private final TermuxActivity act; private final FrameLayout host; private final Ui ui; private final MacroStore store;
-    private LinearLayout listBox;
+    private final TermuxActivity act; private final Ui ui; private final MacroStore store;
+    private LinearLayout strip;
+    private boolean editMode;
+    private final java.util.Map<String, java.util.concurrent.atomic.AtomicBoolean> loops = new java.util.HashMap<>();
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private static final long HOLD_MS = 500, DOUBLE_TAP_MS = 320;
 
     private interface Cb<T> { void ok(T v); }
 
-    public MacroPanel(TermuxActivity a, FrameLayout h) { act = a; host = h; ui = new Ui(a); store = new MacroStore(a); }
+    public MacroPanel(TermuxActivity a) { act = a; ui = new Ui(a); store = new MacroStore(a); }
 
-    public void build() {
-        host.removeAllViews();
-        ScrollView sv = new ScrollView(act);
-        LinearLayout col = new LinearLayout(act); col.setOrientation(LinearLayout.VERTICAL); col.setPadding(ui.dp(14), ui.dp(24), ui.dp(14), ui.dp(18));
-        LinearLayout head = new LinearLayout(act); head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = ui.label("Кнопки", 22, ui.text, true); head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView add = ui.button("＋", true, new Runnable() { @Override public void run() { edit(null); } });
-        add.setTextSize(20); head.addView(add, new LinearLayout.LayoutParams(ui.dp(52), ui.dp(44)));
-        col.addView(head);
-        TextView hint = ui.label("Нажать — выполнить, долго держать — изменить.", 12, ui.sub, false); hint.setPadding(0, ui.dp(4), 0, ui.dp(8)); col.addView(hint);
-        listBox = new LinearLayout(act); listBox.setOrientation(LinearLayout.VERTICAL); col.addView(listBox);
-        sv.addView(col); host.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    // ---- the bar: 2 rows, scrolls sideways; first column = "+" and edit-mode toggle ------------------------------------------
+    public View createBar() {
+        HorizontalScrollView sv = new HorizontalScrollView(act);
+        sv.setHorizontalScrollBarEnabled(false); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        strip = new LinearLayout(act); strip.setOrientation(LinearLayout.HORIZONTAL);
+        sv.addView(strip, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         refresh();
+        return sv;
+    }
+
+    private LinearLayout column() { LinearLayout c = new LinearLayout(act); c.setOrientation(LinearLayout.VERTICAL); return c; }
+
+    private LinearLayout.LayoutParams cell() { LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, 0, 1); lp.setMargins(ui.dp(2), ui.dp(2), ui.dp(2), ui.dp(2)); return lp; }
+
+    private TextView pill(String label, int minDp) {
+        TextView t = new TextView(act); t.setText(label); t.setGravity(Gravity.CENTER); t.setSingleLine(true); t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        t.setTextSize(13); t.setMinWidth(ui.dp(minDp)); t.setPadding(ui.dp(12), 0, ui.dp(12), 0); t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        paint(t, false); return t;
+    }
+
+    private void paint(TextView t, boolean active) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setCornerRadius(ui.dp(14));
+        g.setColor(active ? ui.accent : androidx.core.content.ContextCompat.getColor(act, com.termux.shared.R.color.god_surface2));
+        t.setBackground(g); t.setTextColor(active ? (ui.dark ? 0xFF0B1220 : 0xFFFFFFFF) : ui.text);
     }
 
     private void refresh() {
-        listBox.removeAllViews();
-        if (store.macros.isEmpty()) listBox.addView(ui.label("Пока нет кнопок. Нажмите «＋».", 14, ui.sub, false));
-        LinearLayout row = null;
-        for (int i = 0; i < store.macros.size(); i++) {
-            final Macro m = store.macros.get(i);
-            if (i % 2 == 0) { row = new LinearLayout(act); listBox.addView(row, ui.gap(8)); }
-            TextView b = ui.button(m.label, false, new Runnable() { @Override public void run() { MacroRunner.run(act, m, store); } });
-            b.setMaxLines(2); b.setMinHeight(ui.dp(52));
-            b.setOnLongClickListener(new View.OnLongClickListener() { @Override public boolean onLongClick(View v) { options(m); return true; } });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1); lp.setMargins(i % 2 == 0 ? 0 : ui.dp(4), 0, i % 2 == 0 ? ui.dp(4) : 0, 0);
-            row.addView(b, lp);
+        strip.removeAllViews();
+        LinearLayout c0 = column();
+        TextView add = pill("＋", 44); add.setTextSize(18);
+        add.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { edit(null); } });
+        final TextView ed = pill("✎", 44); ed.setTextSize(16); paint(ed, editMode);
+        ed.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { editMode = !editMode; paint(ed, editMode);
+            Toast.makeText(act, editMode ? "Режим правки: нажмите кнопку, чтобы изменить" : "Режим правки выключен", Toast.LENGTH_SHORT).show(); } });
+        c0.addView(add, cell()); c0.addView(ed, cell());
+        strip.addView(c0, new LinearLayout.LayoutParams(-2, -1));
+        for (int i = 0; i < store.macros.size(); i += 2) {
+            LinearLayout col = column();
+            col.addView(macroButton(store.macros.get(i)), cell());
+            if (i + 1 < store.macros.size()) col.addView(macroButton(store.macros.get(i + 1)), cell());
+            else { View sp = new View(act); col.addView(sp, new LinearLayout.LayoutParams(1, 0, 1)); }
+            strip.addView(col, new LinearLayout.LayoutParams(-2, -1));
         }
+    }
+
+    /** tap = run once; hold 0.5 s = repeat while held; double tap = loop until tapped again; in edit mode a tap opens the options. */
+    private TextView macroButton(final Macro m) {
+        final TextView b = pill(m.label, 64);
+        paint(b, loops.containsKey(m.id));
+        b.setOnTouchListener(new View.OnTouchListener() {
+            boolean holding; long lastTap; java.util.concurrent.atomic.AtomicBoolean holdFlag;
+            final Runnable holdStart = new Runnable() { @Override public void run() {
+                holding = true; holdFlag = new java.util.concurrent.atomic.AtomicBoolean(true); paint(b, true);
+                MacroRunner.runLoop(act, m, store, holdFlag, 120); } };
+            @Override public boolean onTouch(View v, MotionEvent e) {
+                switch (e.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        holding = false; b.setAlpha(0.7f);
+                        if (!editMode) handler.postDelayed(holdStart, HOLD_MS);
+                        return true;
+                    case MotionEvent.ACTION_UP: case MotionEvent.ACTION_CANCEL:
+                        b.setAlpha(1f); handler.removeCallbacks(holdStart);
+                        if (holding) { holdFlag.set(false); holding = false; paint(b, loops.containsKey(m.id)); return true; }
+                        if (e.getAction() == MotionEvent.ACTION_CANCEL) return true;
+                        if (editMode) { options(m); return true; }
+                        java.util.concurrent.atomic.AtomicBoolean loop = loops.get(m.id);
+                        if (loop != null) { loop.set(false); loops.remove(m.id); paint(b, false); return true; }   // tap while looping = stop
+                        long now = android.os.SystemClock.uptimeMillis();
+                        if (now - lastTap <= DOUBLE_TAP_MS) {                                                     // double tap = loop
+                            lastTap = 0; loop = new java.util.concurrent.atomic.AtomicBoolean(true); loops.put(m.id, loop); paint(b, true);
+                            MacroRunner.runLoop(act, m, store, loop, 250); return true;
+                        }
+                        lastTap = now; MacroRunner.run(act, m, store); return true;
+                    default: return true;
+                }
+            } });
+        return b;
     }
 
     private void options(final Macro m) {

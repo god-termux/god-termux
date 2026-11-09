@@ -18,7 +18,6 @@ import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.FrameLayout;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.EditText;
@@ -528,6 +527,31 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         terminalToolbarViewPager.setAdapter(new TerminalToolbarViewPager.PageAdapter(this, savedTextInput));
         terminalToolbarViewPager.addOnPageChangeListener(new TerminalToolbarViewPager.OnPageChangeListener(this, terminalToolbarViewPager));
+        setupToolbarPager(terminalToolbarViewPager);
+    }
+
+    /** god-termux: three toolbar pages (macros | extra keys | text input), extra keys by default, arrows to flip pages. */
+    private void setupToolbarPager(final ViewPager pager) {
+        pager.setOffscreenPageLimit(2);
+        pager.setCurrentItem(1, false);
+        View left = findViewById(R.id.toolbar_arrow_left), right = findViewById(R.id.toolbar_arrow_right);
+        if (left != null) left.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { pager.setCurrentItem(Math.max(0, pager.getCurrentItem() - 1), true); }
+        });
+        if (right != null) right.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { pager.setCurrentItem(Math.min(2, pager.getCurrentItem() + 1), true); }
+        });
+        syncToolbarArrows();
+    }
+
+    /** Shows the page arrows only while the toolbar is visible, hides the one that leads nowhere. */
+    public void syncToolbarArrows() {
+        ViewPager pager = getTerminalToolbarViewPager();
+        View left = findViewById(R.id.toolbar_arrow_left), right = findViewById(R.id.toolbar_arrow_right);
+        if (pager == null || left == null || right == null) return;
+        boolean shown = pager.getVisibility() == View.VISIBLE; int cur = pager.getCurrentItem();
+        left.setVisibility(shown ? (cur > 0 ? View.VISIBLE : View.INVISIBLE) : View.GONE);
+        right.setVisibility(shown ? (cur < 2 ? View.VISIBLE : View.INVISIBLE) : View.GONE);
     }
 
     private void setTerminalToolbarHeight() {
@@ -548,6 +572,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         final boolean showNow = mPreferences.toogleShowTerminalToolbar();
         Logger.showToast(this, (showNow ? getString(R.string.msg_enabling_terminal_toolbar) : getString(R.string.msg_disabling_terminal_toolbar)), true);
         terminalToolbarViewPager.setVisibility(showNow ? View.VISIBLE : View.GONE);
+        syncToolbarArrows();
         if (showNow && isTerminalToolbarTextInputViewSelected()) {
             // Focus the text input view if just revealed.
             findViewById(R.id.terminal_toolbar_text_input).requestFocus();
@@ -604,7 +629,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     @SuppressLint("RtlHardcoded")
     @Override
     public void onBackPressed() {
-        if (getDrawer().isDrawerOpen(Gravity.LEFT) || getDrawer().isDrawerOpen(Gravity.RIGHT)) {
+        if (getDrawer().isDrawerOpen(Gravity.LEFT)) {
             getDrawer().closeDrawers();
         } else {
             finishActivityIfNotFinishing();
@@ -847,26 +872,6 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             Object dragger = f.get(drawer);
             dragger.getClass().getMethod("setEdgeSize", int.class).invoke(dragger, (int) (40 * dp));
         } catch (Throwable ignored) {}
-        final View handleRight = findViewById(R.id.drawer_handle_right);
-        final FrameLayout rightHost = (FrameLayout) findViewById(R.id.right_drawer);
-        if (rightHost != null) {
-            try { new com.termux.mod.macros.MacroPanel(this, rightHost).build(); } catch (Throwable t) { android.util.Log.e("god-termux", "macro panel", t); }
-        }
-        if (handleRight != null) {
-            handleRight.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) { drawer.openDrawer(androidx.core.view.GravityCompat.END); }
-            });
-            final float[] downXR = new float[1];
-            handleRight.setOnTouchListener(new View.OnTouchListener() {   // drag the right handle to the left
-                @Override public boolean onTouch(View v, android.view.MotionEvent e) {
-                    if (e.getAction() == android.view.MotionEvent.ACTION_DOWN) { downXR[0] = e.getRawX(); return false; }
-                    if (e.getAction() == android.view.MotionEvent.ACTION_MOVE && downXR[0] - e.getRawX() > 24 * dp) {
-                        drawer.openDrawer(androidx.core.view.GravityCompat.END); return true;
-                    }
-                    return false;
-                }
-            });
-        }
         if (handle != null) {
             handle.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { drawer.openDrawer(androidx.core.view.GravityCompat.START); }
@@ -882,8 +887,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                 }
             });
             drawer.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
-                @Override public void onDrawerOpened(View d) { handle.setVisibility(View.GONE); if (handleRight != null) handleRight.setVisibility(View.GONE); }
-                @Override public void onDrawerClosed(View d) { handle.setVisibility(View.VISIBLE); if (handleRight != null) handleRight.setVisibility(View.VISIBLE); }
+                @Override public void onDrawerOpened(View d) { handle.setVisibility(View.GONE); }
+                @Override public void onDrawerClosed(View d) { handle.setVisibility(View.VISIBLE); }
             });
         }
         if (android.os.Build.VERSION.SDK_INT >= 29) {   // receive swipes from the left edge instead of the system Back gesture
@@ -891,10 +896,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
                 @Override public void onLayoutChange(View v, int l, int t, int r, int b, int oldL, int oldT, int oldR, int oldB) {
                     int h = b - t; int rh = (int) Math.min(240 * dp, h * 0.6f); int top = (h - rh) / 2;
-                    java.util.List<android.graphics.Rect> ex = new java.util.ArrayList<>();
-                    ex.add(new android.graphics.Rect(0, top, (int) (36 * dp), top + rh));
-                    ex.add(new android.graphics.Rect(r - l - (int) (36 * dp), top, r - l, top + rh));
-                    v.setSystemGestureExclusionRects(ex);
+                    v.setSystemGestureExclusionRects(java.util.Collections.singletonList(new android.graphics.Rect(0, top, (int) (36 * dp), top + rh)));
                 }
             });
         }
@@ -914,11 +916,11 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     }
 
     public boolean isTerminalViewSelected() {
-        return getTerminalToolbarViewPager().getCurrentItem() == 0;
+        return getTerminalToolbarViewPager().getCurrentItem() != 2;
     }
 
     public boolean isTerminalToolbarTextInputViewSelected() {
-        return getTerminalToolbarViewPager().getCurrentItem() == 1;
+        return getTerminalToolbarViewPager().getCurrentItem() == 2;
     }
 
 

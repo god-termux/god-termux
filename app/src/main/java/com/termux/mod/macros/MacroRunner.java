@@ -43,6 +43,13 @@ public final class MacroRunner {
         new Thread(new Runnable() { @Override public void run() { try { play(act, m, store, 0); } catch (InterruptedException ignored) {} } }, "god-macro").start();
     }
 
+    /** Repeats the macro until the flag is cleared (hold / loop mode). gapMs = pause between repeats. */
+    public static void runLoop(final TermuxActivity act, final Macro m, final MacroStore store, final java.util.concurrent.atomic.AtomicBoolean on, final long gapMs) {
+        new Thread(new Runnable() { @Override public void run() {
+            try { while (on.get()) { play(act, m, store, 0); if (!on.get()) break; Thread.sleep(gapMs); } } catch (InterruptedException ignored) {}
+        } }, "god-macro-loop").start();
+    }
+
     private static void key(final TermuxActivity act, final int code, final boolean down, final int meta) {
         act.runOnUiThread(new Runnable() { @Override public void run() {
             TerminalView v = act.getTerminalView(); if (v == null) return;

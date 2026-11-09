@@ -28,7 +28,7 @@ public class TerminalToolbarViewPager {
 
         @Override
         public int getCount() {
-            return 2;
+            return 3;   // god-termux: 0 = macros, 1 = extra keys (default), 2 = text input
         }
 
         @Override
@@ -42,6 +42,8 @@ public class TerminalToolbarViewPager {
             LayoutInflater inflater = LayoutInflater.from(mActivity);
             View layout;
             if (position == 0) {
+                layout = new com.termux.mod.macros.MacroPanel(mActivity).createBar();
+            } else if (position == 1) {
                 layout = inflater.inflate(R.layout.view_terminal_toolbar_extra_keys, collection, false);
                 ExtraKeysView extraKeysView = (ExtraKeysView) layout;
                 extraKeysView.setExtraKeysViewClient(mActivity.getTermuxTerminalExtraKeys());
@@ -104,12 +106,13 @@ public class TerminalToolbarViewPager {
 
         @Override
         public void onPageSelected(int position) {
-            if (position == 0) {
+            if (position != 2) {
                 mActivity.getTerminalView().requestFocus();
             } else {
                 final EditText editText = mTerminalToolbarViewPager.findViewById(R.id.terminal_toolbar_text_input);
                 if (editText != null) editText.requestFocus();
             }
+            mActivity.syncToolbarArrows();
         }
 
     }
