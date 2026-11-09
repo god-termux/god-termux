@@ -557,14 +557,16 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         syncToolbarArrows();
     }
 
-    /** Shows the page arrows only while the toolbar is visible, hides the one that leads nowhere. */
+    /** Shows the navigation strip only while the toolbar is visible; dims the arrow that leads nowhere; shows the current page. */
     public void syncToolbarArrows() {
         ViewPager pager = getTerminalToolbarViewPager();
-        View left = findViewById(R.id.toolbar_arrow_left), right = findViewById(R.id.toolbar_arrow_right);
-        if (pager == null || left == null || right == null) return;
+        View nav = findViewById(R.id.toolbar_nav), left = findViewById(R.id.toolbar_arrow_left), right = findViewById(R.id.toolbar_arrow_right);
+        android.widget.TextView label = (android.widget.TextView) findViewById(R.id.toolbar_page_label);
+        if (pager == null || nav == null || left == null || right == null) return;
         boolean shown = pager.getVisibility() == View.VISIBLE; int cur = pager.getCurrentItem();
-        left.setVisibility(shown ? (cur > 0 ? View.VISIBLE : View.INVISIBLE) : View.GONE);
-        right.setVisibility(shown ? (cur < 2 ? View.VISIBLE : View.INVISIBLE) : View.GONE);
+        nav.setVisibility(shown ? View.VISIBLE : View.GONE);
+        left.setAlpha(cur > 0 ? 1f : 0.3f); right.setAlpha(cur < 2 ? 1f : 0.3f);
+        if (label != null) label.setText((cur == 0 ? "●○○   Макросы" : cur == 1 ? "○●○   Клавиши" : "○○●   Ввод текста"));
     }
 
     private void setTerminalToolbarHeight() {

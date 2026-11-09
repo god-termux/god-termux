@@ -20,7 +20,7 @@
             android:id="@+id/drawer_layout"
             android:layout_width="match_parent"
             android:layout_alignParentTop="true"
-            android:layout_above="@+id/terminal_toolbar_view_pager"
+            android:layout_above="@+id/toolbar_nav"
             android:layout_height="match_parent">
 
             <com.termux.view.TerminalView
@@ -145,33 +145,54 @@
             android:layout_alignParentBottom="true" />
 
         <!-- god-termux: arrows to flip the toolbar pages (macros | extra keys | text input) instead of laggy swipes -->
-        <ImageView
-            android:id="@+id/toolbar_arrow_left"
-            android:layout_width="34dp"
-            android:layout_height="112dp"
-            android:layout_alignBottom="@id/terminal_toolbar_view_pager"
-            android:layout_alignParentStart="true"
-            android:background="@drawable/god_handle_bg"
-            android:contentDescription="Previous panel"
-            android:padding="4dp"
-            android:scaleType="centerInside"
-            android:src="@drawable/god_ic_chevron_left"
-            android:visibility="gone"
-            tools:ignore="HardcodedText" />
 
-        <ImageView
-            android:id="@+id/toolbar_arrow_right"
-            android:layout_width="34dp"
-            android:layout_height="112dp"
-            android:layout_alignBottom="@id/terminal_toolbar_view_pager"
-            android:layout_alignParentEnd="true"
-            android:background="@drawable/god_handle_bg_right"
-            android:contentDescription="Next panel"
-            android:padding="3dp"
-            android:scaleType="centerInside"
-            android:src="@drawable/god_ic_chevron"
-            android:visibility="gone"
-            tools:ignore="HardcodedText" />
+
+
+        <!-- god-termux: thin strip above the toolbar with page arrows (macros | keys | input) -->
+        <LinearLayout
+            android:id="@+id/toolbar_nav"
+            android:layout_width="match_parent"
+            android:layout_height="34dp"
+            android:layout_above="@id/terminal_toolbar_view_pager"
+            android:orientation="horizontal"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:gravity="center_vertical"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/toolbar_arrow_left"
+                android:layout_width="76dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/god_nav_btn_bg"
+                android:contentDescription="Previous panel"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/god_ic_nav_left"
+                tools:ignore="HardcodedText" />
+
+            <TextView
+                android:id="@+id/toolbar_page_label"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:textColor="@color/god_text2"
+                android:textSize="12sp" />
+
+            <ImageView
+                android:id="@+id/toolbar_arrow_right"
+                android:layout_width="76dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/god_nav_btn_bg"
+                android:contentDescription="Next panel"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/god_ic_nav_right"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
 
     </RelativeLayout>
 
