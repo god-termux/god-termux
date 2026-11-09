@@ -34,6 +34,12 @@ public class TermuxApplication extends Application {
 
         Logger.logDebug("Starting Application");
 
+        // god-termux: runtime install + mods (built-in and ~/.termux/mods)
+        try {
+            com.termux.mod.GodRuntime.init(this);
+            com.termux.mod.ModLoader.loadAll(this);
+        } catch (Throwable t) { android.util.Log.e("god-termux", "mods", t); }
+
         // Set TermuxBootstrap.TERMUX_APP_PACKAGE_MANAGER and TermuxBootstrap.TERMUX_APP_PACKAGE_VARIANT
         TermuxBootstrap.setTermuxPackageManagerAndVariant(BuildConfig.TERMUX_PACKAGE_VARIANT);
 

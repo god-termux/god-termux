@@ -1,4 +1,5 @@
-<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:android="http://schemas.android.com/apk/res/android">
 
     <Preference
         app:key="termux"
@@ -45,5 +46,19 @@
         app:title="@string/donate_preference_title"
         app:persistent="false"
         app:isPreferenceVisible="false"/>
+
+
+    <Preference
+        app:key="god_privileged"
+        app:title="Привилегированный шелл"
+        app:summary="Встроенный ADB вместо Shizuku: сопряжение, статус, проверка (команда gsh)">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.termux"
+            android:targetClass="com.termux.mod.ModActivity">
+            <extra android:name="class" android:value="adbfind.AdbScreen" />
+            <extra android:name="fullscreen" android:value="false" />
+        </intent>
+    </Preference>
 
 </PreferenceScreen>

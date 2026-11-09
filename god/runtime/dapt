@@ -1,0 +1,108 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# dapt: apt for an isolated Debian (arm64) tree in $PREFIX/debian (does not touch Termux's own dpkg/apt).
+#   dapt init | update | install PKG | remove PKG | search X | show X | list --installed | dpkg ARGS | dpkg-query ARGS | fixlinks
+P=${PREFIX:-/data/data/com.termux/files/usr}; D=${DAPT_ROOT:-$P/debian}
+gen() { sed "s#@P@#$P#g; s#@D@#$D#g"; }
+
+init() {
+  echo "dapt: initialising Debian tree in $D"
+  mkdir -p "$D"/{var/lib/dpkg/{info,updates,alternatives},var/lib/apt/lists/partial,var/cache/apt/archives/partial,var/log,etc/{dpkg,alternatives,apt/{sources.list.d,preferences.d,apt.conf.d,trusted.gpg.d}},tmp,usr/{bin,lib,share/keyrings},.ddpkg-bin}
+  touch "$D/var/lib/dpkg/status" "$D/var/lib/dpkg/available"
+  gen > "$D/.ddpkg-bin/dpkg" <<'E2'
+#!@P@/bin/bash
+# dpkg for the isolated Debian tree. Under the fhs-run supervisor in "Debian mode" so maintainer scripts see /etc,/usr,/var inside @D@.
+D=@D@
+export FHS_DEBIAN=1
+R=""; [ -x @P@/glibc/shim/fhs-run ] && R=@P@/glibc/shim/fhs-run
+PATH="$D/.ddpkg-bin:$PATH" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends-version --log=$D/var/log/dpkg.log "$@"
+rc=$?; "$D/.ddpkg-bin/fixlinks"; exit $rc
+E2
+  gen > "$D/.ddpkg-bin/fixlinks" <<'E2'
+#!@P@/bin/bash
+# absolute symlinks inside the Debian tree point at host paths; the kernel resolves them itself, so re-point them into the tree
+D=@D@
+find "$D" -xdev -type l 2>/dev/null | while read -r l; do
+  t=$(readlink "$l"); case "$t" in
+    "$D"/*|/data/*|/proc/*|/sys/*|/dev/*|/system/*) continue ;;
+    /*) if [ -e "$D$t" ] || [ -L "$D$t" ]; then ln -sfn "$D$t" "$l"; fi ;;
+  esac
+done
+E2
+  gen > "$D/.ddpkg-bin/update-alternatives" <<'E2'
+#!@P@/bin/bash
+exec @P@/bin/update-alternatives --instdir "@D@" --altdir "@D@/etc/alternatives" --admindir "@D@/var/lib/dpkg/alternatives" "$@"
+E2
+  chmod +x "$D/.ddpkg-bin/"*
+  gen > "$D/etc/apt/apt.conf" <<'E2'
+Dir "@D@/";
+Dir::Etc "etc/apt";
+Dir::State "var/lib/apt";
+Dir::State::status "@D@/var/lib/dpkg/status";
+Dir::Cache "var/cache/apt";
+Dir::Log "var/log/apt";
+Dir::Bin::dpkg "@D@/.ddpkg-bin/dpkg";
+Dir::Bin::methods "@P@/lib/apt/methods";
+Dir::Bin::gpgv "@P@/bin/gpgv";
+Dir::Etc::sourcelist "/dev/null";
+Dir::Etc::sourceparts "@D@/etc/apt/sources.list.d";
+Dir::Etc::preferencesparts "@D@/etc/apt/preferences.d";
+Dir::Etc::parts "@D@/etc/apt/apt.conf.d";
+Dir::Etc::trusted "/dev/null";
+Dir::Etc::trustedparts "@D@/etc/apt/trusted.gpg.d";
+APT::Architecture "arm64";
+APT::Architectures { "arm64"; };
+APT::Install-Recommends "false";
+Debug::NoLocking "true";
+E2
+  [ -f "$D/etc/apt/sources.list.d/debian.sources" ] || gen > "$D/etc/apt/sources.list.d/debian.sources" <<'E2'
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: stable stable-updates
+Components: main
+Architectures: arm64
+Signed-By: @D@/usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: stable-security
+Components: main
+Architectures: arm64
+Signed-By: @D@/usr/share/keyrings/debian-archive-keyring.gpg
+E2
+  [ -f "$D/etc/apt/preferences.d/termux-stubs" ] || printf 'Package: libc6 libgcc-s1 libstdc++6 zlib1g\nPin: release *\nPin-Priority: -1\n' > "$D/etc/apt/preferences.d/termux-stubs"
+  # architecture
+  "$D/.ddpkg-bin/dpkg" --print-foreign-architectures 2>/dev/null | grep -qx arm64 || "$D/.ddpkg-bin/dpkg" --add-architecture arm64
+  # archive keyring
+  if [ ! -s "$D/usr/share/keyrings/debian-archive-keyring.gpg" ]; then
+    echo "dapt: fetching Debian archive keyring"; T=$(mktemp -d); U=http://deb.debian.org/debian/pool/main/d/debian-archive-keyring/
+    F=$(curl -fsSL "$U" | grep -oE 'debian-archive-keyring_[0-9][^"]*_all\.deb' | sort -V | tail -1) || true
+    [ -n "$F" ] && curl -fsSL -o "$T/k.deb" "$U$F" && dpkg-deb -x "$T/k.deb" "$T/x" && cp "$T/x/usr/share/keyrings/debian-archive-keyring.gpg" "$D/usr/share/keyrings/" || { echo "dapt: could not fetch keyring" >&2; rm -rf "$T"; return 1; }
+    rm -rf "$T"
+  fi
+  # stub packages for what Termux's glibc already provides
+  if ! "$D/.ddpkg-bin/dpkg" -s libc6 >/dev/null 2>&1; then
+    echo "dapt: installing libc6/libgcc-s1/libstdc++6/zlib1g stubs"; S=$(mktemp -d)
+    for spec in libc6:2.44-0termux libgcc-s1:15.2.0-0termux libstdc++6:15.2.0-0termux zlib1g:1:1.3.2-0termux; do n=${spec%%:*}; v=${spec#*:}
+      mkdir -p "$S/$n/DEBIAN"; chmod 755 "$S/$n" "$S/$n/DEBIAN"
+      printf 'Package: %s\nVersion: %s\nArchitecture: arm64\nMaintainer: god-termux <nobody@localhost>\nSection: libs\nPriority: required\nDescription: stub: provided by Termux glibc\n Dummy package so Debian arm64 packages see this dependency as satisfied.\n' "$n" "$v" > "$S/$n/DEBIAN/control"
+      dpkg-deb --build -Zgzip "$S/$n" "$S/$n.deb" >/dev/null
+    done
+    "$D/.ddpkg-bin/dpkg" -i "$S"/*.deb >/dev/null && echo "dapt: stubs installed" || echo "dapt: stub install failed" >&2
+    rm -rf "$S"
+  fi
+  echo "dapt: ready. Next: dapt update"
+}
+
+export APT_CONFIG=$D/etc/apt/apt.conf
+case "$(basename "$0")" in
+  dapt-get)   exec $P/bin/apt-get "$@" ;;
+  dapt-cache) exec $P/bin/apt-cache "$@" ;;
+esac
+case "$1" in
+  init)       init; exit $? ;;
+  dpkg)       shift; exec "$D/.ddpkg-bin/dpkg" "$@" ;;
+  dpkg-query) shift; exec $P/bin/dpkg-query --admindir=$D/var/lib/dpkg "$@" ;;
+  fixlinks)   exec "$D/.ddpkg-bin/fixlinks" ;;
+esac
+[ -f "$APT_CONFIG" ] || { echo "dapt: Debian tree is not initialised; running 'dapt init'" >&2; init || exit 1; }
+exec $P/bin/apt "$@"

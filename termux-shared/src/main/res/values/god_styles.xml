@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Rounded shapes everywhere (dialogs, buttons, cards). -->
+    <style name="ShapeAppearance.God.Small" parent="ShapeAppearance.MaterialComponents.SmallComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="ShapeAppearance.God.Medium" parent="ShapeAppearance.MaterialComponents.MediumComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">20dp</item>
+    </style>
+    <style name="ShapeAppearance.God.Large" parent="ShapeAppearance.MaterialComponents.LargeComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">28dp</item>
+    </style>
+
+    <!-- Flat toolbar: text/icons follow the god palette instead of the old red action bar. -->
+    <style name="ThemeOverlay.God.Toolbar" parent="ThemeOverlay.AppCompat.DayNight.ActionBar">
+        <item name="android:textColorPrimary">@color/god_text</item>
+        <item name="android:textColorSecondary">@color/god_text2</item>
+        <item name="colorControlNormal">@color/god_text</item>
+    </style>
+</resources>

@@ -1,0 +1,23 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# gsh: run commands as the Android "shell" user (uid 2000) without the Shizuku app.
+#   gsh -c 'pm list packages'   |  gsh pm list packages   |  gsh pair 123456   |  gsh status
+# Order: running Shizuku (rish) -> built-in ADB over Wireless debugging (endpoint found by the adbfind mod).
+T=${PREFIX:-/data/data/com.termux/files/usr}/tmp
+ep() { [ -f "$T/adb-connect-port" ] && cat "$T/adb-connect-port"; }
+adbup() { local e; e=$(ep) || return 1; adb connect "$e" >/dev/null 2>&1; adb -s "$e" get-state >/dev/null 2>&1 || return 1; echo "$e"; }
+case "$1" in
+  status)
+    echo "connect endpoint: $(ep || echo none)   pair endpoint: $(cat $T/adb-pair-port 2>/dev/null || echo none)"
+    e=$(adbup) && echo "adb: connected to $e (uid: $(adb -s $e shell id -u))" || echo "adb: not connected (run: gsh pair CODE)"
+    export RISH_APPLICATION_ID=com.termux; command -v rish >/dev/null && rish -c 'id -u' >/dev/null 2>&1 && echo "shizuku (rish): working" ;;
+  pair)
+    [ -n "$2" ] || { echo "usage: gsh pair CODE   (Settings > Developer options > Wireless debugging > Pair device with pairing code; keep that dialog open)"; exit 1; }
+    p=$(cat "$T/adb-pair-port" 2>/dev/null) || { echo "no pairing dialog found: open 'Pair device with pairing code' first"; exit 1; }
+    adb pair "$p" "$2" ;;
+  -c) shift; set -- "$1" ;&
+  *)
+    export RISH_APPLICATION_ID=com.termux
+    if command -v rish >/dev/null && rish -c true >/dev/null 2>&1; then exec rish -c "$*"; fi
+    e=$(adbup) || { echo "gsh: no privileged shell. Enable Wireless debugging, then: gsh pair CODE" >&2; exit 1; }
+    exec adb -s "$e" shell "$*" ;;
+esac

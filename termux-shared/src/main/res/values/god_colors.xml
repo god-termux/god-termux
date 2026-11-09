@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- god-termux palette (light). Overridden in values-night. -->
+    <color name="god_accent">#2F6BFF</color>
+    <color name="god_on_accent">#FFFFFF</color>
+    <color name="god_bg">#F3F4F7</color>
+    <color name="god_surface">#FFFFFF</color>
+    <color name="god_surface2">#ECEEF3</color>
+    <color name="god_outline">#E3E5EA</color>
+    <color name="god_text">#16181D</color>
+    <color name="god_text2">#646B76</color>
+    <color name="god_accent_soft">#1F2F6BFF</color>
+</resources>
