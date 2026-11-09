@@ -18,6 +18,7 @@ import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.EditText;
@@ -603,7 +604,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     @SuppressLint("RtlHardcoded")
     @Override
     public void onBackPressed() {
-        if (getDrawer().isDrawerOpen(Gravity.LEFT)) {
+        if (getDrawer().isDrawerOpen(Gravity.LEFT) || getDrawer().isDrawerOpen(Gravity.RIGHT)) {
             getDrawer().closeDrawers();
         } else {
             finishActivityIfNotFinishing();
@@ -846,6 +847,26 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             Object dragger = f.get(drawer);
             dragger.getClass().getMethod("setEdgeSize", int.class).invoke(dragger, (int) (40 * dp));
         } catch (Throwable ignored) {}
+        final View handleRight = findViewById(R.id.drawer_handle_right);
+        final FrameLayout rightHost = (FrameLayout) findViewById(R.id.right_drawer);
+        if (rightHost != null) {
+            try { new com.termux.mod.macros.MacroPanel(this, rightHost).build(); } catch (Throwable t) { android.util.Log.e("god-termux", "macro panel", t); }
+        }
+        if (handleRight != null) {
+            handleRight.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { drawer.openDrawer(androidx.core.view.GravityCompat.END); }
+            });
+            final float[] downXR = new float[1];
+            handleRight.setOnTouchListener(new View.OnTouchListener() {   // drag the right handle to the left
+                @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                    if (e.getAction() == android.view.MotionEvent.ACTION_DOWN) { downXR[0] = e.getRawX(); return false; }
+                    if (e.getAction() == android.view.MotionEvent.ACTION_MOVE && downXR[0] - e.getRawX() > 24 * dp) {
+                        drawer.openDrawer(androidx.core.view.GravityCompat.END); return true;
+                    }
+                    return false;
+                }
+            });
+        }
         if (handle != null) {
             handle.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { drawer.openDrawer(androidx.core.view.GravityCompat.START); }
@@ -861,8 +882,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                 }
             });
             drawer.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
-                @Override public void onDrawerOpened(View d) { handle.setVisibility(View.GONE); }
-                @Override public void onDrawerClosed(View d) { handle.setVisibility(View.VISIBLE); }
+                @Override public void onDrawerOpened(View d) { handle.setVisibility(View.GONE); if (handleRight != null) handleRight.setVisibility(View.GONE); }
+                @Override public void onDrawerClosed(View d) { handle.setVisibility(View.VISIBLE); if (handleRight != null) handleRight.setVisibility(View.VISIBLE); }
             });
         }
         if (android.os.Build.VERSION.SDK_INT >= 29) {   // receive swipes from the left edge instead of the system Back gesture
@@ -870,7 +891,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
                 @Override public void onLayoutChange(View v, int l, int t, int r, int b, int oldL, int oldT, int oldR, int oldB) {
                     int h = b - t; int rh = (int) Math.min(240 * dp, h * 0.6f); int top = (h - rh) / 2;
-                    v.setSystemGestureExclusionRects(java.util.Collections.singletonList(new android.graphics.Rect(0, top, (int) (36 * dp), top + rh)));
+                    java.util.List<android.graphics.Rect> ex = new java.util.ArrayList<>();
+                    ex.add(new android.graphics.Rect(0, top, (int) (36 * dp), top + rh));
+                    ex.add(new android.graphics.Rect(r - l - (int) (36 * dp), top, r - l, top + rh));
+                    v.setSystemGestureExclusionRects(ex);
                 }
             });
         }
