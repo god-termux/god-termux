@@ -838,6 +838,11 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         builder.addAction(actionIcon, actionTitle, PendingIntent.getService(this, 0, toggleWakeLockIntent, 0));
 
 
+        // god-termux: open the Wayland window with the touchpad settings panel
+        Intent padIntent = new Intent().setClassName(this, "com.termux.mod.ModActivity").putExtra("class", "wlcomp.WlScreen").putExtra("fullscreen", true).putExtra("settings", true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        builder.addAction(android.R.drawable.ic_menu_preferences, "Тачпад", PendingIntent.getActivity(this, 1, padIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+
         return builder.build();
     }
 
