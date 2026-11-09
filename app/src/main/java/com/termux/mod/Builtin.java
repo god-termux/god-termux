@@ -13,7 +13,7 @@ public final class Builtin {
         new Entry("adbfind", "🔑", "Привилегированный шелл", "Встроенный ADB вместо Shizuku (команда gsh)", "adbfind.AdbScreen", false, true, adbfind.AdbFind.class, null),
         new Entry("glibcrt", "🐧", "glibc и Debian", "Запуск glibc-программ, FHS-пути, apt для Debian (команда dapt)", "glibcrt.GlibcScreen", false, true, glibcrt.GlibcRt.class, null),
         new Entry("gldemo", "🎮", "GL demo", "Окно с EGL-контекстом на GPU", "gldemo.GlScreen", true, true, null, null),
-        new Entry("wlcomp", "🪟", "Wayland-композитор", "Приложения GTK прямо в окне, без X11 и VNC", null, true, false, null, "В разработке"),
+        new Entry("wlcomp", "🪟", "Wayland-композитор", "GTK-программы в окне на GPU без X11 и VNC (команда wlrun)", "wlcomp.WlScreen", true, true, null, null),
     };
     private Builtin() {}
 }

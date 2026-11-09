@@ -1,0 +1,16 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# wlrun CMD [ARGS...]  - run a Wayland (GTK3/GTK4/Qt) program on the god-termux compositor; opens the compositor window first if needed.
+#   wlrun xfce4-terminal        wlrun gtk3-widget-factory        wlrun --open   (only open the window)
+P=${PREFIX:-/data/data/com.termux/files/usr}
+export XDG_RUNTIME_DIR=$P/tmp WAYLAND_DISPLAY=wayland-0
+SOCK=$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY
+alive() { [ -S "$SOCK" ] && python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(1); s.connect(sys.argv[1])" "$SOCK" 2>/dev/null; }
+if ! alive; then
+  echo "wlrun: opening the Wayland window..." >&2
+  am start -n com.termux/com.termux.mod.ModActivity -f 0x18080000 --es class wlcomp.WlScreen --ez fullscreen true >/dev/null 2>&1
+  for i in $(seq 1 40); do alive && break; sleep 0.25; done
+  alive || { echo "wlrun: compositor did not start (is the Wayland mod enabled? Settings > Mods)" >&2; exit 1; }
+fi
+[ "$1" = "--open" ] && exit 0
+[ $# -eq 0 ] && { echo "usage: wlrun COMMAND [ARGS]   e.g. wlrun xfce4-terminal"; exit 2; }
+exec env GDK_BACKEND=wayland QT_QPA_PLATFORM=wayland NO_AT_BRIDGE=1 MOZ_ENABLE_WAYLAND=1 "$@"

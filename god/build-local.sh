@@ -51,6 +51,10 @@ clang++ -shared -fPIC -O2 -o termux-shared/src/main/jniLibs/arm64-v8a/liblocal-s
 clang -shared -fPIC -O2 -Iapp/src/main/cpp -o $J/libtermux-bootstrap.so app/src/main/cpp/termux-bootstrap.c app/src/main/cpp/termux-bootstrap-zip.S
 clang -shared -fPIC -O2 -std=c++17 -nostdlib++ -o $J/libgldemo.so app/src/main/cpp/gldemo/gl.cpp /system/lib64/libEGL.so /system/lib64/libGLESv2.so /system/lib64/libandroid.so /system/lib64/liblog.so
 cp "$PREFIX/lib/libc++_shared.so" $J/
+# Wayland compositor (needs: pkg install libwayland). libwayland-server & friends are bundled; their sonames are already lib*.so
+W=app/src/main/cpp/wlcomp
+clang++ -std=c++17 -O2 -fPIC -shared -I$W -I$PREFIX/include $W/wl_android.cpp $W/wlc.cpp $W/xdg-shell-protocol.c -o $J/libwlcomp.so -L$PREFIX/lib -lwayland-server /system/lib64/libEGL.so /system/lib64/libGLESv2.so /system/lib64/libandroid.so /system/lib64/liblog.so
+cp "$PREFIX/lib/libwayland-server.so" "$PREFIX/lib/libffi.so" "$PREFIX/lib/libandroid-support.so" $J/
 
 # 4. runtime assets: shim (bionic + glibc variants), supervisor, scripts, checksums
 A=app/src/main/assets/god; mkdir -p $A/glibc/shim $A/bin $A/etc/profile.d; F=god/fhs
@@ -58,7 +62,7 @@ clang -shared -fPIC -O2 -o $A/glibc/shim/libfhs-bionic.so $F/fhs.c -ldl
 PATH=$PREFIX/glibc/bin:$PATH aarch64-linux-gnu-gcc -shared -fPIC -O2 -DGLIBC_BUILD -fuse-ld=bfd -o $A/glibc/shim/libfhs-glibc.so $F/fhs.c -ldl   # needs: pkg install glibc-repo glibc
 clang -O2 -o $A/glibc/shim/fhs-run $F/fhs-run.c
 (cd $A/glibc/shim && sha256sum libfhs-bionic.so libfhs-glibc.so fhs-run > SHA256SUMS)
-cp god/runtime/dapt god/runtime/gsh $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
+cp god/runtime/dapt god/runtime/gsh god/runtime/wlrun $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
 
 # 5. Gradle (aapt2 from Termux; the SDK's x86 aapt2 cannot run here)
 chmod +x gradlew
