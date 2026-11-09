@@ -49,7 +49,7 @@
 
         <!-- Extra keys colors. -->
         <item name="extraKeysButtonTextColor">@color/god_text</item>
-        <item name="extraKeysButtonActiveTextColor">@color/god_on_accent</item>
+        <item name="extraKeysButtonActiveTextColor">@color/god_accent</item>
         <item name="extraKeysButtonBackgroundColor">@color/god_surface2</item>
         <item name="extraKeysButtonActiveBackgroundColor">@color/god_accent</item>
     </style>
