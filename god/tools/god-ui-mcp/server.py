@@ -2,7 +2,7 @@
 """god-ui: MCP server (stdio, no dependencies) that lets Claude look at and drive the phone's UI through ADB.
 Uses the Wireless-debugging endpoint published by god-termux ($PREFIX/tmp/adb-connect-port) or any adb device.
 Tools: screenshot, ui_tree, tap, tap_text, swipe, key, type_text, open, launch, logcat, screen_info, wait."""
-import base64, json, os, re, subprocess, sys, time
+import base64, json, os, re, struct, subprocess, sys, time, zlib
 import xml.etree.ElementTree as ET
 
 PREFIX = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
@@ -57,11 +57,97 @@ def nodes():
                     "enabled": n.get("enabled") == "true", "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2, "b": f"[{x1},{y1}][{x2},{y2}]"})
     return out
 
+def capture(scale=1.0, crop=None):
+    """Raw screencap -> (png_bytes, width, height). Pure python: crop in full-res pixels, scale by nearest-neighbour integer factor."""
+    data = adb("exec-out", "screencap", binary=True)
+    if len(data) < 16:
+        raise RuntimeError("screencap failed: " + data.decode("utf-8", "replace")[:200])
+    w, h, _fmt = struct.unpack("<III", data[:12])
+    hdr = len(data) - w * h * 4
+    px = memoryview(data)[hdr:hdr + w * h * 4]
+    x1, y1, x2, y2 = crop or (0, 0, w, h)
+    x1, x2 = max(0, min(w, x1)), max(0, min(w, x2)); y1, y2 = max(0, min(h, y1)), max(0, min(h, y2))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("empty crop")
+    k = max(1, round(1.0 / scale)) if scale and scale < 1 else 1
+    rows = []
+    for y in range(y1, y2, k):
+        row = px[(y * w + x1) * 4:(y * w + x2) * 4]
+        if k > 1:
+            row = memoryview(bytes(row)).cast("I")[::k]
+        rows.append(b"\x00" + bytes(row))
+    ow = len(range(x1, x2, k)); oh = len(rows)
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", ow, oh, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"".join(rows), 3)) + chunk(b"IEND", b""))
+    return png, ow, oh
+
+def save_png(png, label="shot"):
+    d = os.path.expanduser("~/shots"); os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"god-ui-{time.strftime('%H%M%S')}-{re.sub(r'[^a-z0-9]+', '-', label.lower())}.png")
+    open(path, "wb").write(png); return path
+
+def image(png):
+    return {"type": "image", "data": base64.b64encode(png).decode(), "mimeType": "image/png"}
+
 def t_screenshot(a):
-    data = adb("exec-out", "screencap", "-p", binary=True)
-    if not data.startswith(b"\x89PNG"):
-        return text("screenshot failed: " + data[:200].decode("utf-8", "replace")), True
-    return [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/png"}], False
+    crop = None
+    if a.get("crop"):
+        crop = tuple(int(v) for v in re.split(r"[ ,]+", a["crop"].strip()))
+        if len(crop) != 4:
+            return text("crop must be 'x1,y1,x2,y2' in full-resolution pixels"), True
+    try:
+        png, w, h = capture(float(a.get("scale", 1.0)), crop)
+    except RuntimeError:          # adb may still be (re)connecting right after start
+        endpoint() and subprocess.run(["adb", "connect", endpoint()], capture_output=True, timeout=15)
+        time.sleep(1); png, w, h = capture(float(a.get("scale", 1.0)), crop)
+    info = f"{w}x{h}px"
+    if a.get("save"):
+        info += " saved: " + save_png(png, "screenshot")
+    return [image(png)] + text(info), False
+
+def tap_label(label):
+    for n in nodes():
+        if label.lower() in (n["text"] + " " + n["desc"]).lower() and n["enabled"]:
+            sh(f'input tap {n["cx"]} {n["cy"]}'); return True
+    return False
+
+TOUR_STEPS = ["termux", "drawer", "settings", "settings-termux", "settings-io", "settings-view", "settings-debug", "shell", "mods", "glibc"]
+
+def t_tour(a):
+    only = [x.strip() for x in a.get("only", "").split(",") if x.strip()] or TOUR_STEPS
+    scale = float(a.get("scale", 0.45)); save = bool(a.get("save")); out = []
+    def snap(label):
+        try:
+            time.sleep(1.4); png, w, h = capture(scale)
+            out.append(text(f"## {label} ({w}x{h})")[0]); out.append(image(png))
+            if save: save_png(png, label)
+        except Exception as e:
+            out.append(text(f"## {label}: error {e}")[0])
+    def back():
+        sh("input keyevent 4"); time.sleep(0.8)
+    for step in only:
+        if step == "termux":
+            t_open({"screen": "termux"}); snap("terminal + extra keys")
+        elif step == "drawer":
+            t_open({"screen": "drawer"}); snap("sessions drawer"); sh("input keyevent 4")
+        elif step == "settings":
+            t_open({"screen": "settings"}); snap("settings (root)")
+        elif step.startswith("settings-"):
+            title = {"termux": "Preferences for", "io": "Terminal I/O", "view": "Terminal View", "debug": "Debugging"}[step.split("-", 1)[1]]
+            t_open({"screen": "settings"}); time.sleep(1.2)
+            if step != "settings-termux":
+                tap_label("Preferences for god-termux") or tap_label("god-termux"); time.sleep(1.2)
+            else:
+                tap_label("Preferences for god-termux") or tap_label("god-termux")
+            if step != "settings-termux":
+                if not tap_label(title):
+                    out.append(text(f"## {step}: element {title!r} not found")[0]); continue
+            snap({"settings-termux": "settings: god-termux", "settings-io": "settings: Terminal I/O", "settings-view": "settings: Terminal View", "settings-debug": "settings: Debugging"}[step])
+        elif step in ("shell", "mods", "glibc", "gldemo"):
+            t_open({"screen": step}); snap({"shell": "privileged shell", "mods": "mods", "glibc": "glibc & Debian", "gldemo": "GL demo"}[step])
+    return out, False
 
 def t_ui_tree(a):
     lines = []
@@ -131,7 +217,8 @@ def t_wait(a):
     time.sleep(min(float(a.get("seconds", 1)), 20)); return text("waited"), False
 
 TOOLS = {
-    "screenshot": (t_screenshot, "Take a screenshot of the phone screen (returns the image).", {}),
+    "screenshot": (t_screenshot, "Screenshot of the phone screen. Optional: scale (0.25-1, default 1), crop 'x1,y1,x2,y2' in full-res pixels (zoom into a detail), save (also store a PNG in ~/shots).", {"scale": "number?", "crop": "string?", "save": "boolean?"}),
+    "tour": (t_tour, "Walk through all god-termux menus and return a labelled screenshot of each: terminal, drawer, settings (+ its sub-pages), privileged shell, mods, glibc. Optional: only='drawer,mods,...', scale (default 0.45), save.", {"only": "string?", "scale": "number?", "save": "boolean?"}),
     "ui_tree": (t_ui_tree, "List on-screen elements with text, description, id, tap coordinates, clickable/checked state (uiautomator).", {}),
     "tap": (t_tap, "Tap at pixel coordinates.", {"x": "integer", "y": "integer"}),
     "tap_text": (t_tap_text, "Tap the first enabled element whose text/content-description contains the given text.", {"text": "string"}),

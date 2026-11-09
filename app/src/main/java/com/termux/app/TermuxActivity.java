@@ -215,6 +215,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setContentView(R.layout.activity_termux);
         getDrawer().setScrimColor(0x22000000);   // god-termux: glass drawer, keep the terminal visible
+        setupDrawerAccess();
 
         // Load termux shared preferences
         // This will also fail if TermuxConstants.TERMUX_PACKAGE_NAME does not equal applicationId
@@ -832,6 +833,47 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
     public void setExtraKeysView(ExtraKeysView extraKeysView) {
         mExtraKeysView = extraKeysView;
+    }
+
+    /** god-termux: make the sessions drawer easy to open (handle, wider edge zone, system-gesture exclusion). */
+    private void setupDrawerAccess() {
+        final DrawerLayout drawer = getDrawer();
+        final View handle = findViewById(R.id.drawer_handle);
+        final float dp = getResources().getDisplayMetrics().density;
+        try {   // wider drag zone along the left edge
+            java.lang.reflect.Field f = DrawerLayout.class.getDeclaredField("mLeftDragger");
+            f.setAccessible(true);
+            Object dragger = f.get(drawer);
+            dragger.getClass().getMethod("setEdgeSize", int.class).invoke(dragger, (int) (40 * dp));
+        } catch (Throwable ignored) {}
+        if (handle != null) {
+            handle.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { drawer.openDrawer(androidx.core.view.GravityCompat.START); }
+            });
+            final float[] downX = new float[1];
+            handle.setOnTouchListener(new View.OnTouchListener() {   // drag the handle to the right
+                @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                    if (e.getAction() == android.view.MotionEvent.ACTION_DOWN) { downX[0] = e.getRawX(); return false; }
+                    if (e.getAction() == android.view.MotionEvent.ACTION_MOVE && e.getRawX() - downX[0] > 24 * dp) {
+                        drawer.openDrawer(androidx.core.view.GravityCompat.START); return true;
+                    }
+                    return false;
+                }
+            });
+            drawer.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
+                @Override public void onDrawerOpened(View d) { handle.setVisibility(View.GONE); }
+                @Override public void onDrawerClosed(View d) { handle.setVisibility(View.VISIBLE); }
+            });
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 29) {   // receive swipes from the left edge instead of the system Back gesture
+            final View root = findViewById(R.id.activity_termux_root_view);
+            root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+                @Override public void onLayoutChange(View v, int l, int t, int r, int b, int oldL, int oldT, int oldR, int oldB) {
+                    int h = b - t; int rh = (int) Math.min(240 * dp, h * 0.6f); int top = (h - rh) / 2;
+                    v.setSystemGestureExclusionRects(java.util.Collections.singletonList(new android.graphics.Rect(0, top, (int) (36 * dp), top + rh)));
+                }
+            });
+        }
     }
 
     public DrawerLayout getDrawer() {

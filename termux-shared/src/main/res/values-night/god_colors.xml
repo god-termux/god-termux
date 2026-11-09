@@ -10,7 +10,7 @@
     <color name="god_text">#EDEEF0</color>
     <color name="god_text2">#9AA0AA</color>
     <color name="god_accent_soft">#337AA7FF</color>
-    <color name="god_glass">#D91A1C21</color>
+    <color name="god_glass">#E61A1C21</color>
     <color name="god_glass2">#9923262D</color>
     <color name="god_glass_line">#33FFFFFF</color>
 </resources>
