@@ -99,7 +99,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
     @Override public void applyDisplay() {
         act.setRequestedOrientation(p.orient == 1 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE : p.orient == 2 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         WindowManager.LayoutParams lp = act.getWindow().getAttributes();
-        if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = p.cutout ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+        if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = p.cutout ? (Build.VERSION.SDK_INT >= 30 ? 3 /* ALWAYS: also the long edges in landscape */ : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES) : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
         act.getWindow().setAttributes(lp);
         if (p.keepOn) act.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); else act.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applySystemBars();
@@ -108,6 +108,11 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
 
     private void applySystemBars() {
         View d = act.getWindow().getDecorView();
+        if (Build.VERSION.SDK_INT >= 30) {
+            act.getWindow().setDecorFitsSystemWindows(!p.fullscreen);
+            android.view.WindowInsetsController c = act.getWindow().getInsetsController();
+            if (c != null) { if (p.fullscreen) { c.hide(android.view.WindowInsets.Type.systemBars()); c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE); } else c.show(android.view.WindowInsets.Type.systemBars()); }
+        }
         if (p.fullscreen) d.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
             | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         else d.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);

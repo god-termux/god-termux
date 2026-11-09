@@ -50,6 +50,18 @@ E2
   chmod +x "$D/.ddpkg-bin/"*
 }
 
+# regenerate the caches Debian maintainer scripts would have built with host tools (they pick up Termux's bionic tools first, which is wrong for this tree)
+refresh_caches() {
+  [ -x "$P/glibc/shim/fhs-run" ] || return 0
+  FHS_DEBIAN=1 "$P/glibc/shim/fhs-run" "$P/bin/sh" -c '
+    for t in /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders; do [ -x $t ] && $t --update-cache >/dev/null 2>&1; done
+    [ -x /usr/bin/glib-compile-schemas ] && /usr/bin/glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1
+    [ -x /usr/bin/update-mime-database ] && /usr/bin/update-mime-database /usr/share/mime >/dev/null 2>&1
+    if [ -x /usr/bin/gtk-update-icon-cache ]; then for d in /usr/share/icons/*/; do [ -f "${d}index.theme" ] && /usr/bin/gtk-update-icon-cache -qf "$d" >/dev/null 2>&1; done; fi
+    [ -x /usr/bin/fc-cache ] && /usr/bin/fc-cache -s >/dev/null 2>&1
+    true' 2>/dev/null
+}
+
 init() {
   echo "dapt: initialising Debian tree in $D"
   mkdir -p "$D"/{var/lib/dpkg/{info,updates,alternatives},var/lib/apt/lists/partial,var/cache/apt/archives/partial,var/log,etc/{dpkg,alternatives,apt/{sources.list.d,preferences.d,apt.conf.d,trusted.gpg.d}},tmp,usr/{bin,lib,share/keyrings},.ddpkg-bin}
@@ -126,6 +138,9 @@ case "$1" in
   dpkg)       shift; exec "$D/.ddpkg-bin/dpkg" "$@" ;;
   dpkg-query) shift; exec $P/bin/dpkg-query --admindir=$D/var/lib/dpkg "$@" ;;
   fixlinks)   exec "$D/.ddpkg-bin/fixlinks" ;;
+  refresh)    refresh_caches; exit 0 ;;
 esac
 [ -f "$APT_CONFIG" ] || { echo "dapt: Debian tree is not initialised; running 'dapt init'" >&2; init || exit 1; }
-exec $P/bin/apt "$@"
+$P/bin/apt "$@"; rc=$?
+case "$1" in install|reinstall|upgrade|full-upgrade|dist-upgrade|remove|purge|autoremove) refresh_caches ;; esac
+exit $rc
