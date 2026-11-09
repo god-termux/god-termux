@@ -53,7 +53,8 @@ clang -shared -fPIC -O2 -std=c++17 -nostdlib++ -o $J/libgldemo.so app/src/main/c
 cp "$PREFIX/lib/libc++_shared.so" $J/
 # Wayland compositor (needs: pkg install libwayland). libwayland-server & friends are bundled; their sonames are already lib*.so
 W=app/src/main/cpp/wlcomp
-clang++ -std=c++17 -O2 -fPIC -shared -I$W -I$PREFIX/include $W/wl_android.cpp $W/wlc.cpp $W/xdg-shell-protocol.c -o $J/libwlcomp.so -L$PREFIX/lib -lwayland-server /system/lib64/libEGL.so /system/lib64/libGLESv2.so /system/lib64/libandroid.so /system/lib64/liblog.so
+clang -x c -O2 -fPIC -c -I$W -I$PREFIX/include $W/xdg-shell-protocol.c -o $TMPDIR/xdg-shell.o
+clang++ -std=c++17 -O2 -fPIC -shared -I$W -I$PREFIX/include $W/wl_android.cpp $W/wlc.cpp $TMPDIR/xdg-shell.o -o $J/libwlcomp.so -L$PREFIX/lib -lwayland-server /system/lib64/libEGL.so /system/lib64/libGLESv2.so /system/lib64/libandroid.so /system/lib64/liblog.so
 cp "$PREFIX/lib/libwayland-server.so" "$PREFIX/lib/libffi.so" "$PREFIX/lib/libandroid-support.so" $J/
 
 # 4. runtime assets: shim (bionic + glibc variants), supervisor, scripts, checksums
