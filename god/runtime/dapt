@@ -11,9 +11,9 @@ wrappers() {
 #!@P@/bin/bash
 # dpkg for the isolated Debian tree. Under the fhs-run supervisor in "Debian mode" so maintainer scripts see /etc,/usr,/var inside @D@.
 D=@D@
-export FHS_DEBIAN=1
+export FHS_DEBIAN=1 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 R=""; [ -x @P@/glibc/shim/fhs-run ] && R=@P@/glibc/shim/fhs-run
-PATH="$D/.ddpkg-bin:$PATH" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends-version --log=$D/var/log/dpkg.log "$@"
+PATH="$D/.ddpkg-bin:$PATH" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends --log=$D/var/log/dpkg.log "$@"
 rc=$?; "$D/.ddpkg-bin/fixlinks"; exit $rc
 E2
   gen > "$D/.ddpkg-bin/fixlinks" <<'E2'
@@ -44,6 +44,9 @@ E2
 @P@/bin/$t "\$@" 2>/dev/null; exit 0
 E2
   done
+  # init-system / account helpers that have nothing to do in an app sandbox: no-ops so maintainer scripts finish
+  for t in update-rc.d invoke-rc.d deb-systemd-helper deb-systemd-invoke systemctl systemd-tmpfiles systemd-sysusers systemd-machine-id-setup policy-rc.d add-shell remove-shell dpkg-statoverride pam-auth-update adduser addgroup useradd groupadd usermod; do
+    printf '#!@P@/bin/sh\nexit 0\n' | gen > "$D/.ddpkg-bin/$t"; done
   chmod +x "$D/.ddpkg-bin/"*
 }
 
@@ -88,7 +91,7 @@ Components: main
 Architectures: arm64
 Signed-By: @D@/usr/share/keyrings/debian-archive-keyring.gpg
 E2
-  printf 'Package: libc6 libgcc-s1 libstdc++6 zlib1g systemd systemd-sysv libpam-systemd\nPin: release *\nPin-Priority: -1\n' > "$D/etc/apt/preferences.d/termux-stubs"
+  printf 'Package: libc6 libgcc-s1 libstdc++6 zlib1g systemd systemd-sysv libpam-systemd adduser passwd\nPin: release *\nPin-Priority: -1\n' > "$D/etc/apt/preferences.d/termux-stubs"
   # architecture
   "$D/.ddpkg-bin/dpkg" --print-foreign-architectures 2>/dev/null | grep -qx arm64 || "$D/.ddpkg-bin/dpkg" --add-architecture arm64
   # archive keyring
@@ -100,7 +103,7 @@ E2
   fi
   # stub packages for what Termux's glibc already provides / what cannot run here (no init system)
   S=$(mktemp -d); have=0
-  for spec in libc6:2.44-0termux libgcc-s1:15.2.0-0termux libstdc++6:15.2.0-0termux zlib1g:1:1.3.2-0termux systemd:257.99-0termux systemd-sysv:257.99-0termux libpam-systemd:257.99-0termux; do n=${spec%%:*}; v=${spec#*:}
+  for spec in libc6:2.44-0termux libgcc-s1:15.2.0-0termux libstdc++6:15.2.0-0termux zlib1g:1:1.3.2-0termux systemd:257.99-0termux systemd-sysv:257.99-0termux libpam-systemd:257.99-0termux adduser:3.999-0termux passwd:1:4.999-0termux; do n=${spec%%:*}; v=${spec#*:}
     "$D/.ddpkg-bin/dpkg" -s "$n" 2>/dev/null | grep -q "^Description: stub" && continue
     mkdir -p "$S/$n/DEBIAN"; chmod 755 "$S/$n" "$S/$n/DEBIAN"; have=1
     printf 'Package: %s\nVersion: %s\nArchitecture: arm64\nMaintainer: god-termux <nobody@localhost>\nSection: libs\nPriority: required\nDescription: stub: provided by Termux / not applicable here\n Dummy package so Debian arm64 packages see this dependency as satisfied.\n' "$n" "$v" > "$S/$n/DEBIAN/control"
@@ -112,6 +115,7 @@ E2
 }
 
 export APT_CONFIG=$D/etc/apt/apt.conf
+export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true TZ=${TZ:-UTC}   # maintainer scripts must never prompt
 [ -d "$D/.ddpkg-bin" ] && wrappers
 case "$(basename "$0")" in
   dapt-get)   exec $P/bin/apt-get "$@" ;;

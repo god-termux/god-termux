@@ -1,0 +1,20 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# xfce-wl: real XFCE (xfce4-panel + xfdesktop + Thunar...) from the Debian tree, on a nested labwc, inside the god-termux Wayland window.
+#   xfce-wl           start (opens the compositor window if needed)    xfce-wl stop   stop the session
+P=${PREFIX:-/data/data/com.termux/files/usr}; D=$P/debian; F=$P/glibc/shim/fhs-run
+export XDG_RUNTIME_DIR=$P/tmp
+alive() { [ -S "$XDG_RUNTIME_DIR/$1" ] && python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(sys.argv[1])" "$XDG_RUNTIME_DIR/$1" 2>/dev/null; }
+if [ "$1" = stop ]; then pkill -x labwc 2>/dev/null; for p in labwc xfce4-panel xfdesktop xfsettingsd; do pkill -f "$D/usr/bin/$p" 2>/dev/null; done; rm -f "$XDG_RUNTIME_DIR"/wayland-1*; exit 0; fi
+[ -x "$D/usr/bin/labwc" ] || { echo "xfce-wl: Debian packages missing. Run: dapt update && dapt install --no-install-recommends labwc xfce4-panel xfdesktop4 xfce4-terminal thunar xfce4-whiskermenu-plugin xfce4-settings adwaita-icon-theme fonts-dejavu-core dbus dbus-daemon xfce4-session" >&2; exit 1; }
+WAYLAND_DISPLAY=wayland-0 wlrun --open || exit 1
+if ! alive wayland-1; then
+  mkdir -p "$P/tmp/.X11-unix" "$HOME/.config/labwc"
+  [ -f "$HOME/.config/labwc/autostart" ] || printf '/usr/bin/xfsettingsd &\n/usr/bin/xfdesktop &\n/usr/bin/xfce4-panel &\n' > "$HOME/.config/labwc/autostart"
+  rm -f "$XDG_RUNTIME_DIR"/wayland-1*
+  ( export WAYLAND_DISPLAY=wayland-0 WLR_BACKENDS=wayland WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 LIBSEAT_BACKEND=noop FHS_DEBIAN=1 GDK_BACKEND=wayland \
+      XDG_DATA_DIRS=/usr/share XDG_CONFIG_DIRS=/etc/xdg NO_AT_BRIDGE=1 XDG_CURRENT_DESKTOP=XFCE
+    nohup "$F" "$P/bin/sh" -c 'exec dbus-run-session -- labwc' > "$P/tmp/xfce-wl.log" 2>&1 & )
+  for i in $(seq 1 60); do alive wayland-1 && break; sleep 0.25; done
+  alive wayland-1 || { echo "xfce-wl: labwc did not start, see $P/tmp/xfce-wl.log" >&2; exit 1; }
+fi
+echo "xfce-wl: desktop running (log: $P/tmp/xfce-wl.log)"

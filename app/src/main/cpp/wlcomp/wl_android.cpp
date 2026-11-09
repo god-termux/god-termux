@@ -44,7 +44,7 @@ void glEnable(GLenum); void glDisable(GLenum); void glBlendFunc(GLenum, GLenum);
 #define GL_FALSE 0
 
 namespace {
-std::thread th; std::atomic<bool> running{false}, resizeReq{false}; std::atomic<int> reqW{0}, reqH{0};
+std::thread th; std::atomic<bool> running{false}, resizeReq{false}; std::atomic<int> reqW{0}, reqH{0}, scaleReq{0};
 std::mutex wm; ANativeWindow* newWin = nullptr; bool winChanged = false;   // handed over from the UI thread
 std::string rtDir; int startW = 0, startH = 0, startScale = 2;
 
@@ -80,6 +80,7 @@ void renderLoop() {
           else texs.clear();   // textures belong to the old context state after a surface change: recreate lazily
         }
       } }
+    { int sr = scaleReq.exchange(0); if (sr) { wlc_set_scale(sr); force = true; } }
     if (resizeReq.exchange(false)) { W = reqW; H = reqH; wlc_resize(W, H); force = true; }
     WlcWin ws[64]; int cnt = wlc_windows(ws, 64); bool need = force;
     if (surf != EGL_NO_SURFACE && ready) {
@@ -126,6 +127,7 @@ JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeSurface(JNIEnv* e, jclass, job
   } else if (nw) { reqW = w; reqH = h; resizeReq = true; }
 }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeResize(JNIEnv*, jclass, jint w, jint h) { reqW = w; reqH = h; resizeReq = true; }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeScale(JNIEnv*, jclass, jint s) { scaleReq = s; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeStop(JNIEnv*, jclass) { running = false; if (th.joinable()) th.join(); }
 JNIEXPORT jboolean JNICALL Java_wlcomp_WlScreen_nativeRunning(JNIEnv*, jclass) { return running ? JNI_TRUE : JNI_FALSE; }
 JNIEXPORT jint JNICALL Java_wlcomp_WlScreen_nativeWindows(JNIEnv*, jclass) { return running ? wlc_window_count() : 0; }

@@ -21,6 +21,7 @@ void wlc_clean(int id);
 void wlc_frame_done(void);                // call after every presented frame
 void wlc_resize(int px_w, int px_h);
 int  wlc_scale(void);
+void wlc_set_scale(int scale);             // change the output scale at runtime (re-announces the output, re-configures toplevels)
 void wlc_stop(void);
 // input (thread-safe, coordinates in physical pixels)
 void wlc_in_motion(float x, float y);

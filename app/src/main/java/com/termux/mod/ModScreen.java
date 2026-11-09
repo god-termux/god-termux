@@ -1,5 +1,6 @@
 package com.termux.mod;
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 /** Mods implement this to draw into a window hosted by ModActivity. */
 public interface ModScreen {
@@ -10,4 +11,7 @@ public interface ModScreen {
     default void onStop() {}
     default void onDestroy() {}
     default void onFocus(boolean has) {}
+    default void onNewIntent(Intent i) {}
+    /** return true when the back press was consumed */
+    default boolean onBack() { return false; }
 }

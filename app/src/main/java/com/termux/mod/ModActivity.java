@@ -1,5 +1,6 @@
 package com.termux.mod;
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.WindowManager;
@@ -7,6 +8,7 @@ import android.view.WindowManager;
 /** am start -n com.termux/com.termux.mod.ModActivity --es mod NAME --es class pkg.Cls [--ez fullscreen true] */
 public class ModActivity extends Activity {
     private ModScreen screen;
+    protected void notifyNewIntent(Intent i) { if (screen != null) screen.onNewIntent(i); }
     @Override protected void onCreate(Bundle s) {
         super.onCreate(s);
         String mod = getIntent().getStringExtra("mod");
@@ -20,6 +22,7 @@ public class ModActivity extends Activity {
             screen.onCreate(this, s);
         } catch (Throwable t) { Log.e("TermuxMod", "ModActivity", t); finish(); }
     }
+    @Override public void onBackPressed() { if (screen != null && screen.onBack()) return; super.onBackPressed(); }
     @Override protected void onStart() { super.onStart(); if (screen != null) screen.onStart(); }
     @Override protected void onResume() { super.onResume(); if (screen != null) screen.onResume(); }
     @Override protected void onPause() { if (screen != null) screen.onPause(); super.onPause(); }

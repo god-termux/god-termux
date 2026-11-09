@@ -7,6 +7,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <poll.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -21,7 +22,7 @@ extern char** environ;
 #define __NR_renameat 38
 #endif
 static const int NRS[] = {__NR_openat, __NR_newfstatat, __NR_faccessat, __NR_faccessat2, __NR_readlinkat, __NR_statx,
-  __NR_mkdirat, __NR_unlinkat, __NR_symlinkat, __NR_linkat, __NR_renameat, __NR_renameat2, __NR_fchmodat, __NR_fchownat, __NR_utimensat};
+  __NR_mkdirat, __NR_unlinkat, __NR_symlinkat, __NR_linkat, __NR_renameat, __NR_renameat2, __NR_fchmodat, __NR_fchownat, __NR_utimensat, __NR_bind, __NR_connect};
 #define NN (sizeof NRS / sizeof NRS[0])
 
 static int send_fd(int s, int fd) { char c = 1; struct iovec io = {&c, 1}; char cb[CMSG_SPACE(sizeof(int))] = {0};
@@ -47,7 +48,9 @@ static const char* mapat(int mem, uint64_t addr, char* orig, char* mp) {
   if (rdstr(mem, addr, orig, PATH_MAX) || orig[0] != '/') return NULL;
   const char* m = fmap(orig, mp); return m == orig ? NULL : m;
 }
-static int handle_write(int fd, struct seccomp_notif* rq, int mem) {
+static int handle_write_i(int fd, struct seccomp_notif* rq, int mem);
+static int handle_write(int fd, struct seccomp_notif* rq, int mem) { fhs_create = 1; int r = handle_write_i(fd, rq, mem); fhs_create = 0; return r; }
+static int handle_write_i(int fd, struct seccomp_notif* rq, int mem) {
   int nr = rq->data.nr; const uint64_t* a = rq->data.args; char o1[PATH_MAX], m1[PATH_MAX], o2[PATH_MAX], m2[PATH_MAX]; long res = 0;
   if (nr == __NR_mkdirat || nr == __NR_unlinkat || nr == __NR_fchmodat || nr == __NR_fchownat || nr == __NR_utimensat) {
     const char* m = mapat(mem, a[1], o1, m1); if (!m) return 0;
@@ -73,13 +76,31 @@ static int handle_write(int fd, struct seccomp_notif* rq, int mem) {
   if (ioctl(fd, SECCOMP_IOCTL_NOTIF_ID_VALID, &rq->id) < 0) return 1;
   reply(fd, rq, res < 0 ? 0 : res, res < 0 ? errno : 0, 0); return 1;
 }
+// AF_UNIX bind/connect with FHS paths (e.g. /tmp/.X11-unix/X0): the socket belongs to the tracee, so operate on a duplicate via pidfd_getfd
+static int handle_sock(int fd, struct seccomp_notif* rq, int mem) {
+  const uint64_t* a = rq->data.args; socklen_t len = (socklen_t)a[2]; if (len < 3 || len > sizeof(struct sockaddr_un)) return 0;
+  struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
+  if (pread(mem, &sa, len, a[1] & 0x00ffffffffffffffULL) != (ssize_t)len || sa.sun_family != AF_UNIX || sa.sun_path[0] != '/') return 0;
+  char orig[PATH_MAX], mp[PATH_MAX]; snprintf(orig, sizeof orig, "%.*s", (int)(len - offsetof(struct sockaddr_un, sun_path)), sa.sun_path);
+  fhs_create = (rq->data.nr == __NR_bind); const char* m = fmap(orig, mp); fhs_create = 0;
+  if (m == orig || strlen(m) >= sizeof sa.sun_path) return 0;
+  struct sockaddr_un na; memset(&na, 0, sizeof na); na.sun_family = AF_UNIX; strcpy(na.sun_path, m);
+  socklen_t nl = offsetof(struct sockaddr_un, sun_path) + strlen(m) + 1;
+  int pfd = syscall(434 /*pidfd_open*/, rq->pid, 0); if (pfd < 0) return 0;
+  int tfd = syscall(438 /*pidfd_getfd*/, pfd, (int)a[0], 0); close(pfd); if (tfd < 0) return 0;
+  if (ioctl(fd, SECCOMP_IOCTL_NOTIF_ID_VALID, &rq->id) < 0) { close(tfd); return 1; }
+  long res = rq->data.nr == __NR_bind ? bind(tfd, (struct sockaddr*)&na, nl) : connect(tfd, (struct sockaddr*)&na, nl); int e = res < 0 ? errno : 0; close(tfd);
+  reply(fd, rq, e ? 0 : res, e, 0); return 1;
+}
 static void handle(int fd, struct seccomp_notif* rq) {
   int nr = rq->data.nr; const uint64_t* a = rq->data.args; int pi = (nr == __NR_openat || nr == __NR_newfstatat || nr == __NR_faccessat || nr == __NR_faccessat2 || nr == __NR_readlinkat || nr == __NR_statx) ? 1 : -1;
   char pp[64]; snprintf(pp, sizeof pp, "/proc/%d/mem", rq->pid); int mem = open(pp, O_RDWR);
+  if (mem >= 0 && (nr == __NR_bind || nr == __NR_connect)) { int r = handle_sock(fd, rq, mem); if (!r) reply(fd, rq, 0, 0, 1); close(mem); return; }
   if (mem >= 0 && handle_write(fd, rq, mem)) { close(mem); return; }
   char path[PATH_MAX], mp[PATH_MAX];
   if (mem < 0 || pi < 0 || rdstr(mem, a[pi], path, sizeof path) || path[0] != '/') { if (mem >= 0) close(mem); reply(fd, rq, 0, 0, 1); return; }
-  const char* m = fmap(path, mp);
+  fhs_create = (nr == __NR_openat && ((int)a[2] & O_CREAT)) ? 1 : 0;
+  const char* m = fmap(path, mp); fhs_create = 0;
   if (m == path) { close(mem); reply(fd, rq, 0, 0, 1); return; }
   if (ioctl(fd, SECCOMP_IOCTL_NOTIF_ID_VALID, &rq->id) < 0) { close(mem); return; }
   long res = 0; int e = 0;

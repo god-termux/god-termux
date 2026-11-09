@@ -451,6 +451,11 @@ void wlc_resize(int w, int h) {
   for (Surf* s : order) if (!s->popup && s->xs && s->xs->top) send_toplevel_configure(s->xs);
 }
 int wlc_scale(void) { return SCALE; }
+void wlc_set_scale(int sc) {
+  if (sc < 1) sc = 1; if (sc > 4) sc = 4; if (sc == SCALE) return; SCALE = sc;
+  for (wl_resource* o : outputs) send_output(o);
+  for (Surf* s : order) if (!s->popup && s->xs && s->xs->top) send_toplevel_configure(s->xs);
+}
 void wlc_stop(void) { if (dpy) { wl_display_destroy_clients(dpy); wl_display_destroy(dpy); dpy = nullptr; } order.clear(); }
 void wlc_in_motion(float x, float y) { push(Ev{E_MOTION, x, y, 0}); }
 void wlc_in_button(int b, int p) { push(Ev{E_BUTTON, (float)p, 0, b}); }

@@ -27,6 +27,8 @@ static unsigned fhs_hash(const char* p) { unsigned h = 2166136261u; while (*p) h
 // map a "standard Linux" absolute path to a Termux one. out must be PATH_MAX.
 static int fhs_trace = -1;
 static int fhs_deb = -1;
+static int fhs_create = 0;   // set by the supervisor around creating operations: the Debian tree wins whenever the parent directory exists there
+static int fhs_parent_exists(const char* p) { char t[PATH_MAX]; strncpy(t, p, PATH_MAX - 1); t[PATH_MAX - 1] = 0; char* sl = strrchr(t, '/'); if (!sl || sl == t) return 0; *sl = 0; return rexists(t); }
 static void fhs_tr(const char* a, const char* b) { char m[2 * PATH_MAX + 32]; int n = snprintf(m, sizeof m, "fhs: %s -> %s\n", a, b ? b : "(unchanged)"); syscall(SYS_write, 2, m, n); }
 static const char* fmap_i(const char* in, char* out);
 static const char* fmap(const char* in, char* out) {
@@ -51,16 +53,16 @@ static const char* fmap_i(const char* in, char* out) {
   if (!done) return in;
   snprintf(cc, sizeof cc, DEB "%s", in); c3 = cc;
   size_t il = strlen(in); unsigned h = fhs_hash(in); struct fhs_ce* ce = &fhs_ctab[h % FHS_CN]; long now = fhs_ms();
-  if (ce->h == h && ce->gen == fhs_gen && now - ce->t < FHS_TTL_MS && il < FHS_CL && !strcmp(ce->in, in)) {
+  if (!fhs_create && ce->h == h && ce->gen == fhs_gen && now - ce->t < FHS_TTL_MS && il < FHS_CL && !strcmp(ce->in, in)) {
     strcpy(out, ce->out); return out; }
   const char* pick = c1;
   if (fhs_deb < 0) fhs_deb = getenv("FHS_DEBIAN") != 0;
   if (fhs_deb && !pre(in, "/tmp")) {   // Debian mode (maintainer scripts): the Debian tree wins, also for creating files
-    pick = c3; if (!rexists(c3)) { if (rexists(c1)) pick = c1; else if (c2 && rexists(c2)) pick = c2; }
+    pick = c3; if (!rexists(c3) && !(fhs_create && fhs_parent_exists(c3))) { if (rexists(c1)) pick = c1; else if (c2 && rexists(c2)) pick = c2; }
   } else
   if (!rexists(c1)) { if (c2 && rexists(c2)) pick = c2; else if (c3 && rexists(c3)) pick = c3; }
   strncpy(out, pick, PATH_MAX - 1); out[PATH_MAX - 1] = 0;
-  if (il < FHS_CL && strlen(out) < FHS_CL) { ce->h = h; ce->gen = fhs_gen; ce->t = now; strcpy(ce->in, in); strcpy(ce->out, out); }
+  if (!fhs_create && il < FHS_CL && strlen(out) < FHS_CL) { ce->h = h; ce->gen = fhs_gen; ce->t = now; strcpy(ce->in, in); strcpy(ce->out, out); }
   return out;
 }
 
