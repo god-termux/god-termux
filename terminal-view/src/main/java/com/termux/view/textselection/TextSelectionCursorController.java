@@ -119,36 +119,22 @@ public class TextSelectionCursorController implements CursorController {
                     mSelY2++; mSelX2 = 0;
                 } else break;
             }
-            trimUrlSelection(screen, cols);
+            trimUrlSelection(screen, cols, columnAndRow[0], columnAndRow[1]);
         }
     }
 
-    /** If the selected word is a URL, drop trailing punctuation (".,;:!?'" and unbalanced closing brackets) and a leading bracket/quote. */
-    private void trimUrlSelection(TerminalBuffer screen, int cols) {
+    /** If the selected word contains the link under the finger, narrow the selection to exactly that link (no surrounding brackets, quotes or punctuation). */
+    private void trimUrlSelection(TerminalBuffer screen, int cols, int pressX, int pressY) {
         String t = screen.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
-        if (t == null) return;
-        String lower = t.toLowerCase();
-        if (!(lower.contains("://") || lower.startsWith("www.") || lower.matches("^[\\(\\[<\"'`]+(www\\.|[a-z][a-z0-9+.\\-]*://).*"))) return;
-        // leading bracket / quote
-        while (!t.isEmpty() && "([<\"'`".indexOf(t.charAt(0)) >= 0 && (mSelY1 < mSelY2 || mSelX1 < mSelX2)) {
-            t = t.substring(1);
-            if (mSelX1 < cols - 1) mSelX1++; else { mSelY1++; mSelX1 = 0; }
-        }
-        // trailing punctuation
-        while (t.length() > 1 && (mSelY1 < mSelY2 || mSelX1 < mSelX2)) {
-            char c = t.charAt(t.length() - 1);
-            boolean cut = ".,;:!?'\"`»".indexOf(c) >= 0
-                || (c == ')' && count(t, '(') < count(t, ')'))
-                || (c == ']' && count(t, '[') < count(t, ']'))
-                || (c == '}' && count(t, '{') < count(t, '}'))
-                || c == '>';
-            if (!cut) break;
-            t = t.substring(0, t.length() - 1);
-            if (mSelX2 > 0) mSelX2--; else { mSelY2--; mSelX2 = cols - 1; }
-        }
+        if (t == null || t.length() < 3) return;
+        int idx = Math.max(0, Math.min(t.length() - 1, (pressY - mSelY1) * cols + (pressX - mSelX1)));
+        com.termux.terminal.UrlFinder.Span span = com.termux.terminal.UrlFinder.at(t, idx);
+        if (span == null) return;
+        int lead = span.start, trail = t.length() - span.end;
+        if (lead + trail >= t.length()) return;
+        for (int i = 0; i < lead; i++) { if (mSelX1 < cols - 1) mSelX1++; else { mSelY1++; mSelX1 = 0; } }
+        for (int i = 0; i < trail; i++) { if (mSelX2 > 0) mSelX2--; else { mSelY2--; mSelX2 = cols - 1; } }
     }
-
-    private static int count(String s, char c) { int n = 0; for (int i = 0; i < s.length(); i++) if (s.charAt(i) == c) n++; return n; }
 
     public void setActionModeCallBacks() {
         final ActionMode.Callback callback = new ActionMode.Callback() {
