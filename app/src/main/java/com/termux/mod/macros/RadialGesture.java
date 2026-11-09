@@ -12,19 +12,28 @@ public final class RadialGesture {
     private static final long TAP_MAX_MS = 250, TAP_GAP_MS = 300, HOLD_MS = 300;
     private final TermuxActivity act; private final Handler handler = new Handler(Looper.getMainLooper());
     private final float slop; private RadialMenu menu;
-    private int taps; private long downTime, lastUp; private float lx, ly; private boolean down;
+    private int taps; private long downTime, lastUp; private float lx, ly; private boolean down, swallow;
 
     public RadialGesture(TermuxActivity a) { act = a; slop = 36 * a.getResources().getDisplayMetrics().density; }
 
     private final Runnable hold = new Runnable() { @Override public void run() {
-        if (!down || taps != 3) return;
-        MotionEvent c = MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, lx, ly, 0);
-        act.godSuperDispatch(c); c.recycle();                      // the terminal must not start a text selection
+        if (!swallow || !down) return;
+        swallow = false;
+        View t = act.getTerminalView();
+        if (t instanceof com.termux.view.TerminalView && ((com.termux.view.TerminalView) t).isSelectingText()) ((com.termux.view.TerminalView) t).stopTextSelectionMode();
         menu = new RadialMenu(act, new MacroStore(act));
         if (!menu.show(lx, ly)) { menu = null; reset(); }
     } };
 
-    private void reset() { taps = 0; down = false; handler.removeCallbacks(hold); }
+    /** The swallowed third touch was only a quick tap: hand a normal tap to the terminal. */
+    private void deliverTap() {
+        long t = SystemClock.uptimeMillis();
+        MotionEvent d = MotionEvent.obtain(t - 40, t - 40, MotionEvent.ACTION_DOWN, lx, ly, 0);
+        MotionEvent u = MotionEvent.obtain(t - 40, t, MotionEvent.ACTION_UP, lx, ly, 0);
+        act.godSuperDispatch(d); act.godSuperDispatch(u); d.recycle(); u.recycle();
+    }
+
+    private void reset() { taps = 0; down = false; swallow = false; handler.removeCallbacks(hold); }
 
     private boolean inTerminal(MotionEvent e) {
         View t = act.getTerminalView(); if (t == null || act.getDrawer().isDrawerOpen(android.view.Gravity.LEFT)) return false;
@@ -41,6 +50,13 @@ public final class RadialGesture {
             else if (a == MotionEvent.ACTION_CANCEL) { menu.dismiss(); menu = null; reset(); }
             return true;
         }
+        if (swallow) {                                                 // third touch is ours, the terminal never sees it
+            int a = e.getActionMasked();
+            if (e.getPointerCount() > 1 || a == MotionEvent.ACTION_CANCEL) { reset(); return true; }
+            if (a == MotionEvent.ACTION_MOVE) { if (Math.hypot(e.getX() - lx, e.getY() - ly) > slop) reset(); return true; }
+            if (a == MotionEvent.ACTION_UP) { boolean quick = e.getEventTime() - downTime <= TAP_MAX_MS; handler.removeCallbacks(hold); reset(); if (quick) deliverTap(); return true; }
+            return true;
+        }
         if (e.getPointerCount() > 1) { reset(); return false; }
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
@@ -49,7 +65,7 @@ public final class RadialGesture {
                 boolean near = Math.hypot(e.getX() - lx, e.getY() - ly) <= slop;
                 taps = (taps > 0 && now - lastUp <= TAP_GAP_MS && near) ? taps + 1 : 1;
                 lx = e.getX(); ly = e.getY(); downTime = now; down = true;
-                if (taps == 3) handler.postDelayed(hold, HOLD_MS);
+                if (taps == 3) { swallow = true; handler.postDelayed(hold, HOLD_MS); return true; }   // do not let the terminal see this touch
                 return false;
             case MotionEvent.ACTION_MOVE:
                 if (down && Math.hypot(e.getX() - lx, e.getY() - ly) > slop) reset();
