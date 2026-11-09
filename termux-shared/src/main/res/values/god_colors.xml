@@ -13,4 +13,6 @@
     <color name="god_glass">#E6FFFFFF</color>
     <color name="god_glass2">#99ECEEF3</color>
     <color name="god_glass_line">#33FFFFFF</color>
+    <color name="god_handle">#26FFFFFF</color>
+    <color name="god_handle_line">#1AFFFFFF</color>
 </resources>

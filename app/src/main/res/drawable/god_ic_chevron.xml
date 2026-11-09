@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"
-    android:tint="@color/god_accent">
+    android:tint="@color/god_accent" android:alpha="0.55">
     <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.6" android:strokeLineCap="round" android:strokeLineJoin="round"
         android:pathData="M9,5 L16,12 L9,19" />
 </vector>
