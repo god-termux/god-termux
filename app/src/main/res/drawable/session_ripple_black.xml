@@ -3,7 +3,7 @@
     <item>
         <inset android:insetLeft="10dp" android:insetRight="10dp" android:insetTop="3dp" android:insetBottom="3dp">
             <shape android:shape="rectangle">
-                <solid android:color="@color/god_surface2" />
+                <solid android:color="@color/god_glass2" />
                 <corners android:radius="16dp" />
                 <padding android:left="22dp" android:top="12dp" android:right="16dp" android:bottom="12dp" />
             </shape>

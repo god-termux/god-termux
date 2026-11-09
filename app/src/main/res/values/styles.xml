@@ -34,7 +34,7 @@
     </style>
 
     <style name="Widget.God.Button.Tonal" parent="Widget.MaterialComponents.Button.UnelevatedButton">
-        <item name="backgroundTint">@color/god_surface2</item>
+        <item name="backgroundTint">@color/god_glass2</item>
         <item name="android:textColor">@color/god_accent</item>
         <item name="rippleColor">@color/god_accent_soft</item>
         <item name="cornerRadius">14dp</item>
@@ -54,7 +54,18 @@
     </style>
 
     <!-- drawer text buttons now use the god look in both modes -->
-    <style name="TermuxActivity.Drawer.ButtonBarStyle.Light" parent="@style/Widget.God.Button.Tonal"/>
-    <style name="TermuxActivity.Drawer.ButtonBarStyle.Dark" parent="@style/Widget.God.Button.Tonal"/>
+    <!-- Extra keys: solid fill identical to extraKeysButtonBackgroundColor, because the code repaints keys with that colour -->
+    <style name="Widget.God.Button.Key" parent="Widget.MaterialComponents.Button.UnelevatedButton">
+        <item name="backgroundTint">@color/god_surface2</item>
+        <item name="android:textColor">@color/god_text</item>
+        <item name="rippleColor">@color/god_accent_soft</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+    <style name="TermuxActivity.Drawer.ButtonBarStyle.Light" parent="@style/Widget.God.Button.Key"/>
+    <style name="TermuxActivity.Drawer.ButtonBarStyle.Dark" parent="@style/Widget.God.Button.Key"/>
 
 </resources>

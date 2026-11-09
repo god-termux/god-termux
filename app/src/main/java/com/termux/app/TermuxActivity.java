@@ -214,6 +214,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         super.onCreate(savedInstanceState);
 
         setContentView(R.layout.activity_termux);
+        getDrawer().setScrimColor(0x22000000);   // god-termux: glass drawer, keep the terminal visible
 
         // Load termux shared preferences
         // This will also fail if TermuxConstants.TERMUX_PACKAGE_NAME does not equal applicationId
