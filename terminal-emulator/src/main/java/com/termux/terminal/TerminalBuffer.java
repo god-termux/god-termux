@@ -185,8 +185,11 @@ public final class TerminalBuffer {
 
         // Get the text for the whole wrapped line
         String text = getSelectedText(0, y1, mColumns, y2, true, true);
-        // The index of x in text
-        int textOffset = (y - y1) * mColumns + x;
+        // The index of the pressed cell in text. Counting "rows * columns + x" breaks with wide characters
+        // (one char, two cells) and trimmed rows, so measure the text that precedes and includes the cell instead.
+        if (getSelectedText(x, y, x, y, true, true).trim().isEmpty()) return "";
+        int textOffset = getSelectedText(0, y1, x, y, true, true).length() - 1;
+        if (textOffset < 0) return "";
 
         if (textOffset >= text.length()) {
           // The click was to the right of the last word on the line, so

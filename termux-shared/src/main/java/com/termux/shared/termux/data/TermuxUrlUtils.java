@@ -94,11 +94,29 @@ public class TermuxUrlUtils {
         while (matcher.find()) {
             int matchStart = matcher.start(1);
             int matchEnd = matcher.end();
-            String url = text.substring(matchStart, matchEnd);
+            String url = trimTrailingPunctuation(text.substring(matchStart, matchEnd));
             urlSet.add(url);
         }
 
         return urlSet;
     }
+
+
+    /** god-termux: "see https://a.com/b)." must not include the trailing ")." - drop trailing punctuation and unbalanced closing brackets. */
+    static String trimTrailingPunctuation(String url) {
+        String t = url;
+        while (t.length() > 1) {
+            char c = t.charAt(t.length() - 1);
+            boolean cut = ".,;:!?'\"`".indexOf(c) >= 0
+                || (c == ')' && count(t, '(') < count(t, ')'))
+                || (c == ']' && count(t, '[') < count(t, ']'))
+                || (c == '}' && count(t, '{') < count(t, '}'));
+            if (!cut) break;
+            t = t.substring(0, t.length() - 1);
+        }
+        return t;
+    }
+
+    private static int count(String s, char c) { int n = 0; for (int i = 0; i < s.length(); i++) if (s.charAt(i) == c) n++; return n; }
 
 }

@@ -46,6 +46,17 @@ public class ScreenBufferTest extends TerminalTestCase {
 		assertEquals("ABC\nFG", mTerminal.getScreen().getSelectedText(0, 0, 1, 1, true, true));
 	}
 
+	/** A wide character takes two cells but one char: the pressed cell must still be mapped to the right char. */
+	public void testGetWordAtLocationWideChar() {
+		withTerminalSized(12, 3).enterString("\u6F22 ab cd");
+		assertEquals("", mTerminal.getScreen().getWordAtLocation(2, 0));      // the space after the wide char
+		assertEquals("ab", mTerminal.getScreen().getWordAtLocation(3, 0));
+		assertEquals("ab", mTerminal.getScreen().getWordAtLocation(4, 0));
+		assertEquals("", mTerminal.getScreen().getWordAtLocation(5, 0));      // the space between words
+		assertEquals("cd", mTerminal.getScreen().getWordAtLocation(6, 0));
+		assertEquals("cd", mTerminal.getScreen().getWordAtLocation(7, 0));
+	}
+
 	public void testGetWordAtLocation() {
 		withTerminalSized(5, 3).enterString("ABCDEFGHIJ\r\nKLMNO");
 		assertEquals("ABCDEFGHIJKLMNO", mTerminal.getScreen().getWordAtLocation(0, 0));

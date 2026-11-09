@@ -97,16 +97,59 @@ public class TextSelectionCursorController implements CursorController {
 
         TerminalBuffer screen = terminalView.mEmulator.getScreen();
         if (!" ".equals(screen.getSelectedText(mSelX1, mSelY1, mSelX1, mSelY1))) {
-            // Selecting something other than whitespace. Expand to word.
-            while (mSelX1 > 0 && !"".equals(screen.getSelectedText(mSelX1 - 1, mSelY1, mSelX1 - 1, mSelY1))) {
-                mSelX1--;
+            // Selecting something other than whitespace. Expand to word - across wrapped (soft-broken) rows too.
+            final int cols = terminalView.mEmulator.mColumns;
+            final int top = -screen.getActiveTranscriptRows();
+            final int bottom = terminalView.mEmulator.mRows - 1;
+            while (true) {
+                if (mSelX1 > 0) {
+                    if ("".equals(screen.getSelectedText(mSelX1 - 1, mSelY1, mSelX1 - 1, mSelY1))) break;
+                    mSelX1--;
+                } else if (mSelY1 > top && screen.getLineWrap(mSelY1 - 1)) {
+                    if ("".equals(screen.getSelectedText(cols - 1, mSelY1 - 1, cols - 1, mSelY1 - 1))) break;
+                    mSelY1--; mSelX1 = cols - 1;
+                } else break;
             }
-            while (mSelX2 < terminalView.mEmulator.mColumns - 1 && !"".equals(screen.getSelectedText(mSelX2 + 1, mSelY1, mSelX2 + 1, mSelY1))) {
-                mSelX2++;
+            while (true) {
+                if (mSelX2 < cols - 1) {
+                    if ("".equals(screen.getSelectedText(mSelX2 + 1, mSelY2, mSelX2 + 1, mSelY2))) break;
+                    mSelX2++;
+                } else if (mSelY2 < bottom && screen.getLineWrap(mSelY2)) {
+                    if ("".equals(screen.getSelectedText(0, mSelY2 + 1, 0, mSelY2 + 1))) break;
+                    mSelY2++; mSelX2 = 0;
+                } else break;
             }
+            trimUrlSelection(screen, cols);
         }
     }
-    
+
+    /** If the selected word is a URL, drop trailing punctuation (".,;:!?'" and unbalanced closing brackets) and a leading bracket/quote. */
+    private void trimUrlSelection(TerminalBuffer screen, int cols) {
+        String t = screen.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
+        if (t == null) return;
+        String lower = t.toLowerCase();
+        if (!(lower.contains("://") || lower.startsWith("www.") || lower.matches("^[\\(\\[<\"'`]+(www\\.|[a-z][a-z0-9+.\\-]*://).*"))) return;
+        // leading bracket / quote
+        while (!t.isEmpty() && "([<\"'`".indexOf(t.charAt(0)) >= 0 && (mSelY1 < mSelY2 || mSelX1 < mSelX2)) {
+            t = t.substring(1);
+            if (mSelX1 < cols - 1) mSelX1++; else { mSelY1++; mSelX1 = 0; }
+        }
+        // trailing punctuation
+        while (t.length() > 1 && (mSelY1 < mSelY2 || mSelX1 < mSelX2)) {
+            char c = t.charAt(t.length() - 1);
+            boolean cut = ".,;:!?'\"`»".indexOf(c) >= 0
+                || (c == ')' && count(t, '(') < count(t, ')'))
+                || (c == ']' && count(t, '[') < count(t, ']'))
+                || (c == '}' && count(t, '{') < count(t, '}'))
+                || c == '>';
+            if (!cut) break;
+            t = t.substring(0, t.length() - 1);
+            if (mSelX2 > 0) mSelX2--; else { mSelY2--; mSelX2 = cols - 1; }
+        }
+    }
+
+    private static int count(String s, char c) { int n = 0; for (int i = 0; i < s.length(); i++) if (s.charAt(i) == c) n++; return n; }
+
     public void setActionModeCallBacks() {
         final ActionMode.Callback callback = new ActionMode.Callback() {
             @Override
