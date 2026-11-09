@@ -96,7 +96,7 @@ static int prepare(const char* path, char* const argv[], char* const envp[], con
       char* arg = 0; if (*sp) { *sp++ = 0; while (*sp == ' ' || *sp == '\t') sp++; if (*sp) arg = sp; }
       int ac = 0; while (av[ac]) ac++;
       char** nv = malloc(sizeof(char*) * (ac + 4)); int k = 0;
-      nv[k++] = strdup(ip); if (arg) nv[k++] = strdup(arg); nv[k++] = (char*)real;
+      nv[k++] = strdup(ip); if (arg) nv[k++] = strdup(arg); nv[k++] = strdup(real);
       for (int i = 1; i < ac; i++) nv[k++] = av[i]; nv[k] = 0;
       av = nv; path = nv[0];
       continue;

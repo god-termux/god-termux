@@ -4,17 +4,16 @@
 P=${PREFIX:-/data/data/com.termux/files/usr}; D=${DAPT_ROOT:-$P/debian}
 gen() { sed "s#@P@#$P#g; s#@D@#$D#g"; }
 
-init() {
-  echo "dapt: initialising Debian tree in $D"
-  mkdir -p "$D"/{var/lib/dpkg/{info,updates,alternatives},var/lib/apt/lists/partial,var/cache/apt/archives/partial,var/log,etc/{dpkg,alternatives,apt/{sources.list.d,preferences.d,apt.conf.d,trusted.gpg.d}},tmp,usr/{bin,lib,share/keyrings},.ddpkg-bin}
-  touch "$D/var/lib/dpkg/status" "$D/var/lib/dpkg/available"
+# the helper scripts in the Debian tree are regenerated on every run so fork updates reach existing installs
+wrappers() {
+  mkdir -p "$D/.ddpkg-bin"
   gen > "$D/.ddpkg-bin/dpkg" <<'E2'
 #!@P@/bin/bash
 # dpkg for the isolated Debian tree. Under the fhs-run supervisor in "Debian mode" so maintainer scripts see /etc,/usr,/var inside @D@.
 D=@D@
 export FHS_DEBIAN=1
 R=""; [ -x @P@/glibc/shim/fhs-run ] && R=@P@/glibc/shim/fhs-run
-PATH="$D/.ddpkg-bin:$PATH" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends-version --log=$D/var/log/dpkg.log "$@"
+PATH="$D/.ddpkg-bin:$PATH" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends-version --log=$D/var/log/dpkg.log "$@"
 rc=$?; "$D/.ddpkg-bin/fixlinks"; exit $rc
 E2
   gen > "$D/.ddpkg-bin/fixlinks" <<'E2'
@@ -32,7 +31,27 @@ E2
 #!@P@/bin/bash
 exec @P@/bin/update-alternatives --instdir "@D@" --altdir "@D@/etc/alternatives" --admindir "@D@/var/lib/dpkg/alternatives" "$@"
 E2
+  # maintainer scripts call chown/chgrp for root:* owners, which an unprivileged app uid cannot do; ignore it
+  printf '#!@P@/bin/sh\nexit 0\n' | gen > "$D/.ddpkg-bin/dpkg-maintscript-helper"   # Termux dpkg does not ship it
+  # mkdir -p chdir()s into each parent, and chdir is not translated by the path supervisor: pass Debian-rooted paths explicitly
+  gen > "$D/.ddpkg-bin/mkdir" <<'E2'
+#!@P@/bin/bash
+a=(); for x in "$@"; do case "$x" in /*) case "$x" in @D@/*|@P@/*|/data/*|/sdcard/*|/storage/*|/proc/*|/dev/*) a+=("$x");; *) a+=("@D@$x");; esac;; *) a+=("$x");; esac; done
+exec @P@/bin/mkdir "${a[@]}"
+E2
+  for t in chown chgrp; do gen > "$D/.ddpkg-bin/$t" <<E2
+#!@P@/bin/bash
+@P@/bin/$t "\$@" 2>/dev/null; exit 0
+E2
+  done
   chmod +x "$D/.ddpkg-bin/"*
+}
+
+init() {
+  echo "dapt: initialising Debian tree in $D"
+  mkdir -p "$D"/{var/lib/dpkg/{info,updates,alternatives},var/lib/apt/lists/partial,var/cache/apt/archives/partial,var/log,etc/{dpkg,alternatives,apt/{sources.list.d,preferences.d,apt.conf.d,trusted.gpg.d}},tmp,usr/{bin,lib,share/keyrings},.ddpkg-bin}
+  touch "$D/var/lib/dpkg/status" "$D/var/lib/dpkg/available"
+  wrappers
   gen > "$D/etc/apt/apt.conf" <<'E2'
 Dir "@D@/";
 Dir::Etc "etc/apt";
@@ -69,7 +88,7 @@ Components: main
 Architectures: arm64
 Signed-By: @D@/usr/share/keyrings/debian-archive-keyring.gpg
 E2
-  [ -f "$D/etc/apt/preferences.d/termux-stubs" ] || printf 'Package: libc6 libgcc-s1 libstdc++6 zlib1g\nPin: release *\nPin-Priority: -1\n' > "$D/etc/apt/preferences.d/termux-stubs"
+  printf 'Package: libc6 libgcc-s1 libstdc++6 zlib1g systemd systemd-sysv libpam-systemd\nPin: release *\nPin-Priority: -1\n' > "$D/etc/apt/preferences.d/termux-stubs"
   # architecture
   "$D/.ddpkg-bin/dpkg" --print-foreign-architectures 2>/dev/null | grep -qx arm64 || "$D/.ddpkg-bin/dpkg" --add-architecture arm64
   # archive keyring
@@ -79,21 +98,21 @@ E2
     [ -n "$F" ] && curl -fsSL -o "$T/k.deb" "$U$F" && dpkg-deb -x "$T/k.deb" "$T/x" && cp "$T/x/usr/share/keyrings/debian-archive-keyring.gpg" "$D/usr/share/keyrings/" || { echo "dapt: could not fetch keyring" >&2; rm -rf "$T"; return 1; }
     rm -rf "$T"
   fi
-  # stub packages for what Termux's glibc already provides
-  if ! "$D/.ddpkg-bin/dpkg" -s libc6 >/dev/null 2>&1; then
-    echo "dapt: installing libc6/libgcc-s1/libstdc++6/zlib1g stubs"; S=$(mktemp -d)
-    for spec in libc6:2.44-0termux libgcc-s1:15.2.0-0termux libstdc++6:15.2.0-0termux zlib1g:1:1.3.2-0termux; do n=${spec%%:*}; v=${spec#*:}
-      mkdir -p "$S/$n/DEBIAN"; chmod 755 "$S/$n" "$S/$n/DEBIAN"
-      printf 'Package: %s\nVersion: %s\nArchitecture: arm64\nMaintainer: god-termux <nobody@localhost>\nSection: libs\nPriority: required\nDescription: stub: provided by Termux glibc\n Dummy package so Debian arm64 packages see this dependency as satisfied.\n' "$n" "$v" > "$S/$n/DEBIAN/control"
-      dpkg-deb --build -Zgzip "$S/$n" "$S/$n.deb" >/dev/null
-    done
-    "$D/.ddpkg-bin/dpkg" -i "$S"/*.deb >/dev/null && echo "dapt: stubs installed" || echo "dapt: stub install failed" >&2
-    rm -rf "$S"
-  fi
+  # stub packages for what Termux's glibc already provides / what cannot run here (no init system)
+  S=$(mktemp -d); have=0
+  for spec in libc6:2.44-0termux libgcc-s1:15.2.0-0termux libstdc++6:15.2.0-0termux zlib1g:1:1.3.2-0termux systemd:257.99-0termux systemd-sysv:257.99-0termux libpam-systemd:257.99-0termux; do n=${spec%%:*}; v=${spec#*:}
+    "$D/.ddpkg-bin/dpkg" -s "$n" 2>/dev/null | grep -q "^Description: stub" && continue
+    mkdir -p "$S/$n/DEBIAN"; chmod 755 "$S/$n" "$S/$n/DEBIAN"; have=1
+    printf 'Package: %s\nVersion: %s\nArchitecture: arm64\nMaintainer: god-termux <nobody@localhost>\nSection: libs\nPriority: required\nDescription: stub: provided by Termux / not applicable here\n Dummy package so Debian arm64 packages see this dependency as satisfied.\n' "$n" "$v" > "$S/$n/DEBIAN/control"
+    dpkg-deb --build -Zgzip "$S/$n" "$S/$n.deb" >/dev/null
+  done
+  if [ $have = 1 ]; then "$D/.ddpkg-bin/dpkg" -i "$S"/*.deb >/dev/null && echo "dapt: stubs installed" || echo "dapt: stub install failed" >&2; fi
+  rm -rf "$S"
   echo "dapt: ready. Next: dapt update"
 }
 
 export APT_CONFIG=$D/etc/apt/apt.conf
+[ -d "$D/.ddpkg-bin" ] && wrappers
 case "$(basename "$0")" in
   dapt-get)   exec $P/bin/apt-get "$@" ;;
   dapt-cache) exec $P/bin/apt-cache "$@" ;;

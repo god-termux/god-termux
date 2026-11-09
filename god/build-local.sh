@@ -62,7 +62,8 @@ A=app/src/main/assets/god; mkdir -p $A/glibc/shim $A/bin $A/etc/profile.d; F=god
 clang -shared -fPIC -O2 -o $A/glibc/shim/libfhs-bionic.so $F/fhs.c -ldl
 PATH=$PREFIX/glibc/bin:$PATH aarch64-linux-gnu-gcc -shared -fPIC -O2 -DGLIBC_BUILD -fuse-ld=bfd -o $A/glibc/shim/libfhs-glibc.so $F/fhs.c -ldl   # needs: pkg install glibc-repo glibc
 clang -O2 -o $A/glibc/shim/fhs-run $F/fhs-run.c
-(cd $A/glibc/shim && sha256sum libfhs-bionic.so libfhs-glibc.so fhs-run > SHA256SUMS)
+clang -shared -fPIC -O2 -o $A/glibc/shim/libdapt-nolink.so god/runtime/nolink.c   # dapt: hard link -> copy fallback
+(cd $A/glibc/shim && sha256sum libfhs-bionic.so libfhs-glibc.so fhs-run libdapt-nolink.so > SHA256SUMS)
 cp god/runtime/dapt god/runtime/gsh god/runtime/wlrun $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
 
 # 5. Gradle (aapt2 from Termux; the SDK's x86 aapt2 cannot run here)

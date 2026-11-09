@@ -33,8 +33,9 @@ static int recv_fd(int s) { char c; struct iovec io = {&c, 1}; char cb[CMSG_SPAC
   if (recvmsg(s, &m, 0) <= 0) return -1; struct cmsghdr* h = CMSG_FIRSTHDR(&m); if (!h) return -1; int fd; memcpy(&fd, CMSG_DATA(h), sizeof fd); return fd; }
 
 static int rdstr(int mem, uint64_t addr, char* buf, size_t n) {
+  addr &= 0x00ffffffffffffffULL;   // strip the ARM top-byte (heap tag) from user pointers
   ssize_t k = pread(mem, buf, n - 1, addr); if (k <= 0) return -1; buf[k] = 0; return memchr(buf, 0, k + 1) ? 0 : -1; }
-static int wr(int mem, uint64_t addr, const void* b, size_t n) { return pwrite(mem, b, n, addr) == (ssize_t)n ? 0 : -1; }
+static int wr(int mem, uint64_t addr, const void* b, size_t n) { addr &= 0x00ffffffffffffffULL; return pwrite(mem, b, n, addr) == (ssize_t)n ? 0 : -1; }
 
 static void reply(int fd, struct seccomp_notif* rq, long val, int err, int cont) {
   struct seccomp_notif_resp r; memset(&r, 0, sizeof r); r.id = rq->id; r.val = val; r.error = err ? -err : 0; r.flags = cont ? SECCOMP_USER_NOTIF_FLAG_CONTINUE : 0;
@@ -54,7 +55,7 @@ static int handle_write(int fd, struct seccomp_notif* rq, int mem) {
     else if (nr == __NR_unlinkat) res = syscall(__NR_unlinkat, AT_FDCWD, m, (int)a[2]);
     else if (nr == __NR_fchmodat) res = syscall(__NR_fchmodat, AT_FDCWD, m, (mode_t)a[2]);
     else if (nr == __NR_fchownat) res = syscall(__NR_fchownat, AT_FDCWD, m, (uid_t)a[2], (gid_t)a[3], (int)a[4]);
-    else { char ts[32]; int has = a[2] != 0; if (has && pread(mem, ts, 32, a[2]) != 32) { reply(fd, rq, 0, EFAULT, 0); return 1; }
+    else { char ts[32]; int has = a[2] != 0; if (has && pread(mem, ts, 32, a[2] & 0x00ffffffffffffffULL) != 32) { reply(fd, rq, 0, EFAULT, 0); return 1; }
            res = syscall(__NR_utimensat, AT_FDCWD, m, has ? ts : NULL, (int)a[3]); }
   } else if (nr == __NR_symlinkat) {
     char tgt[PATH_MAX]; const char* m = mapat(mem, a[2], o1, m1); if (!m) return 0;
