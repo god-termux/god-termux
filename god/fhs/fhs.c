@@ -76,10 +76,20 @@ static void fc_put(const struct stat* st, int kind) {
   t->kind = kind; t->dev = st->st_dev; t->ino = st->st_ino; t->size = st->st_size; t->ms = st->st_mtim.tv_sec; t->mns = st->st_mtim.tv_nsec;
   __atomic_store_n(&t->seq, a + 2, __ATOMIC_RELEASE);
 }
+// A binary started as "ld.so --library-path ... binary" has the loader as /proc/self/exe, but programs like Chromium locate their data (and re-exec
+// themselves) through it. FHS_EXE=<real binary> is put into the environment of such processes (and removed for all others); the glibc shim answers
+// readlink("/proc/self/exe") with it and execve("/proc/self/exe") is redirected to it.
+static char** envexe(char** e, const char* real) {
+  int n = 0; while (e[n]) n++; char** r = malloc(sizeof(char*) * (n + 2)); int k = 0;
+  for (int i = 0; i < n; i++) if (strncmp(e[i], "FHS_EXE=", 8)) r[k++] = e[i];
+  if (real) { size_t l = strlen(real) + 9; char* v = malloc(l); snprintf(v, l, "FHS_EXE=%s", real); r[k++] = v; }
+  r[k] = 0; return r;
+}
 // returns 0 ok (outputs filled) or -1/errno
 static int prepare(const char* path, char* const argv[], char* const envp[], const char** op, char*** oa, char*** oe) {
   static __thread char buf[PATH_MAX]; char* argc_hold = 0; (void)argc_hold;
   char** av = (char**)argv; int depth = 0;
+  { const char* fe = path && !strcmp(path, "/proc/self/exe") ? getenv("FHS_EXE") : 0; if (fe && fe[0]) path = fe; }
   for (;;) {
     const char* real = fmap(path, buf);
     struct stat st; int haveSt = syscall(SYS_newfstatat, AT_FDCWD, real, &st, 0) == 0 && S_ISREG(st.st_mode);
@@ -123,7 +133,7 @@ static int prepare(const char* path, char* const argv[], char* const envp[], con
           for (int i = 1; i < ac; i++) nv[k++] = av[i]; nv[k] = 0;
           *op = LDSO; *oa = nv;
         } else { *op = real; *oa = av; }
-        *oe = envcopy(envp, SHIM_G, 1, 0); return 0;
+        *oe = envexe(envcopy(envp, SHIM_G, 1, 0), kind == K_STD ? real : 0); return 0;
       }
       if (kind == K_STATIC && !envhas(envp, "FHS_SUP=") && !envhas(envp, "FHS_STATIC=0") && rexists(GLIB "/shim/fhs-run")) {
         char** nv = malloc(sizeof(char*) * (ac + 3)); int k = 0;
@@ -198,8 +208,13 @@ int fstatat64(int d, const char* p, struct stat64* s, int f) { static int (*r)(i
 int statx(int d, const char* p, int f, unsigned m, struct statx* s) { static int (*r)(int, const char*, int, unsigned, struct statx*); if (!r) r = dlsym(RTLD_NEXT, "statx"); P(p); return r(d, p, f, m, s); }
 int access(const char* p, int m) { static int (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "access"); P(p); return r(p, m); }
 int faccessat(int d, const char* p, int m, int f) { static int (*r)(int, const char*, int, int); if (!r) r = dlsym(RTLD_NEXT, "faccessat"); P(p); return r(d, p, m, f); }
-ssize_t readlink(const char* p, char* b, size_t n) { static ssize_t (*r)(const char*, char*, size_t); if (!r) r = dlsym(RTLD_NEXT, "readlink"); P(p); return r(p, b, n); }
-ssize_t readlinkat(int d, const char* p, char* b, size_t n) { static ssize_t (*r)(int, const char*, char*, size_t); if (!r) r = dlsym(RTLD_NEXT, "readlinkat"); P(p); return r(d, p, b, n); }
+static ssize_t fhs_selfexe(const char* p, char* b, size_t n) {   // readlink("/proc/self/exe") for processes started through the loader
+  if (!p || strcmp(p, "/proc/self/exe")) return -2;
+  const char* fe = getenv("FHS_EXE"); if (!fe || !fe[0]) return -2;
+  size_t l = strlen(fe); if (l > n) l = n; memcpy(b, fe, l); return (ssize_t)l;
+}
+ssize_t readlink(const char* p, char* b, size_t n) { static ssize_t (*r)(const char*, char*, size_t); if (!r) r = dlsym(RTLD_NEXT, "readlink"); ssize_t x = fhs_selfexe(p, b, n); if (x != -2) return x; P(p); return r(p, b, n); }
+ssize_t readlinkat(int d, const char* p, char* b, size_t n) { static ssize_t (*r)(int, const char*, char*, size_t); if (!r) r = dlsym(RTLD_NEXT, "readlinkat"); ssize_t x = fhs_selfexe(p, b, n); if (x != -2) return x; P(p); return r(d, p, b, n); }
 
 // popen/pclose: glibc's internal spawn bypasses our hooks, so reimplement via posix_spawn
 static struct { FILE* f; pid_t pid; } pops[256];
