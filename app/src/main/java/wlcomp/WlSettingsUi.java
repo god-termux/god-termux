@@ -59,6 +59,15 @@ final class WlSettingsUi {
         toggle("Под вырез камеры", "Использовать область вокруг выреза", p.cutout, new BoolSet() { public void set(boolean v) { p.cutout = v; changed(false); } });
         toggle("Не выключать экран", null, p.keepOn, new BoolSet() { public void set(boolean v) { p.keepOn = v; changed(false); } });
 
+        section("Клавиатура");
+        choice("Режим ввода", new String[] {"Обе (авто)", "Только экранная", "Только физическая"}, p.kbMode, new IntSet() { public void set(int v) { p.kbMode = v; changed(false); } },
+            "Авто: работают обе, повтор одного символа из двух путей отбрасывается. Только экранная: события физической клавиатуры игнорируются. Только физическая: экранная клавиатура не показывается и её ввод игнорируется");
+
+        section("Рендер");
+        choice("Графический драйвер", new String[] {"Системный (драйвер Mali)", "ANGLE (OpenGL ES поверх Vulkan)"}, p.render, new IntSet() { public void set(int v) { p.render = v; changed(false); } },
+            "Применяется при следующем запуске Wayland: ☰ → ✕ Закрыть Wayland, затем открыть снова. Если ANGLE не загрузится, будет системный");
+        toggle("Замер производительности", "Непрерывная перерисовка без ограничения кадров; статистика в logcat (тег wlcomp) и tmp/wlcomp-render.log. Нагружает батарею", p.bench, new BoolSet() { public void set(boolean v) { p.bench = v; changed(false); } });
+
         section("Указатель");
         choice("Режим касаний", new String[] {"Прямое касание (как мышь под пальцем)", "Тачпад (весь экран — тачпад)"}, p.touchMode, new IntSet() { public void set(int v) { p.touchMode = v; ptr(true); } },
             "Прямое: тап — клик, долгое нажатие — правая кнопка, два пальца — прокрутка");
@@ -71,6 +80,8 @@ final class WlSettingsUi {
             toggle("Кнопки ЛКМ / ПКМ", "Две экранные кнопки внизу (можно зажимать)", p.padButtons, new BoolSet() { public void set(boolean v) { p.padButtons = v; ptr(false); } });
             slider10("Размер курсора", 0.6f, 2.5f, p.curSize, new FloatSet() { public void set(float v) { p.curSize = v; ptr(false); } });
         }
+        choice("Источник указателя", new String[] {"Касания и мышь (авто)", "Только касания", "Только физическая мышь"}, p.mouseMode, new IntSet() { public void set(int v) { p.mouseMode = v; ptr(false); } },
+            "Физическая мышь: движение, кнопки (левая, правая, средняя) и колесо. Родной курсор Android над окном скрыт, курсор рисует композитор. В режиме «только мышь» касания по картинке игнорируются (кнопка меню остаётся)");
         slider10("Скорость прокрутки", 0.3f, 4f, p.scrollSpeed, new FloatSet() { public void set(float v) { p.scrollSpeed = v; ptr(false); } });
         toggle("Обратная прокрутка", null, p.invScroll, new BoolSet() { public void set(boolean v) { p.invScroll = v; ptr(false); } });
 

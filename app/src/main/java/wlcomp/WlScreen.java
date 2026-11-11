@@ -15,7 +15,9 @@ import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.PointerIcon;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -103,6 +105,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         act.getWindow().setAttributes(lp);
         if (p.keepOn) act.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); else act.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applySystemBars();
+        if (p.kbMode == 2 && kbShown) toggleKeyboard();   // hardware-only: hide the on-screen keyboard
         lastBoxW = lastBoxH = lastSurfW = lastSurfH = -1; layoutStage();
     }
 
@@ -237,8 +240,19 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
     private boolean keyboardShown() { return kbShown; }
     private void toggleKeyboard() {
         InputMethodManager imm = (InputMethodManager) act.getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (p.kbMode == 2 && !kbShown) { Toast.makeText(act, "Режим ввода: только физическая клавиатура (Настройки → Клавиатура)", Toast.LENGTH_SHORT).show(); return; }
         kbShown = !kbShown; view.requestFocus(); applyChrome();
         if (kbShown) imm.showSoftInput(view, InputMethodManager.SHOW_FORCED); else imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+    }
+
+    // A hardware key can reach us twice: as a key event and as text committed by the IME. The same character from the other path within 80 ms is dropped.
+    private int lastC = -1; private long lastT; private boolean lastPhys;
+    private long lastEvT = -1; private int lastEvK = -1, lastEvA = -1;
+    private void typeChar(int c, boolean phys) {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (c == lastC && phys != lastPhys && now - lastT < 80) { lastC = -1; return; }
+        lastC = c; lastT = now; lastPhys = phys;
+        typeChar(c);
     }
 
     private void typeChar(int c) {
@@ -258,13 +272,22 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         }
     }
 
+    /** Input mode (settings): 0 both, 1 on-screen keyboard only, 2 hardware keyboard only. The on-screen keyboard reports the virtual device id (-1). */
+    private boolean keyAllowed(KeyEvent e) {
+        boolean phys = e.getDeviceId() != android.view.KeyCharacterMap.VIRTUAL_KEYBOARD;
+        return p.kbMode == 0 || (p.kbMode == 2 ? phys : !phys);
+    }
+
     private boolean handleKey(KeyEvent e) {
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN; if (e.getAction() == KeyEvent.ACTION_MULTIPLE) return false;
+        if (e.getEventTime() == lastEvT && e.getKeyCode() == lastEvK && e.getAction() == lastEvA) return true;   // the very same event delivered twice (view + IME)
+        lastEvT = e.getEventTime(); lastEvK = e.getKeyCode(); lastEvA = e.getAction();
         int code = evdev(e.getKeyCode());
+        if ((code != 0 || e.getUnicodeChar(e.getMetaState() & ~(KeyEvent.META_CTRL_MASK | KeyEvent.META_ALT_MASK)) > 0) && !keyAllowed(e)) return true;   // input mode: hardware only / on-screen only
         if (code != 0) { if (down || e.getAction() == KeyEvent.ACTION_UP) nativeKey(code, down ? 1 : 0); return true; }
         int u = e.getUnicodeChar(e.getMetaState() & ~(KeyEvent.META_CTRL_MASK | KeyEvent.META_ALT_MASK));
         if (u > 0 && down) {
-            if (e.isCtrlPressed()) { nativeKey(29, 1); nativeChar(Character.toLowerCase(u)); nativeKey(29, 0); } else typeChar(u);
+            if (e.isCtrlPressed()) { nativeKey(29, 1); nativeChar(Character.toLowerCase(u)); nativeKey(29, 0); } else typeChar(u, e.getDeviceId() != android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
             return true;
         }
         return u > 0;
@@ -287,7 +310,8 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         private final Runnable longPress = new Runnable() { @Override public void run() {
             if (!moved && leftDown) { nativeButton(0, 0); nativeButton(1, 1); nativeButton(1, 0); leftDown = false; } } };
 
-        WlView(Context c) { super(c); getHolder().addCallback(this); setFocusable(true); setFocusableInTouchMode(true); slop = ViewConfiguration.get(c).getScaledTouchSlop(); }
+        WlView(Context c) { super(c); getHolder().addCallback(this); setFocusable(true); setFocusableInTouchMode(true); slop = ViewConfiguration.get(c).getScaledTouchSlop();
+            if (Build.VERSION.SDK_INT >= 24) setPointerIcon(PointerIcon.getSystemIcon(c, PointerIcon.TYPE_NULL)); }   // hide Android's own mouse cursor over the picture: the compositor draws its own
 
         @Override public void surfaceCreated(SurfaceHolder h) {}
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) {
@@ -338,7 +362,35 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
             }
         }
 
+        // ---- physical mouse (tool type MOUSE): absolute position, buttons, wheel; drawn with the compositor's own cursor
+        private int mouseBtns;
+        private boolean isMouse(MotionEvent e) { return e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE || (e.getSource() & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE; }
+        private void mouseCursor(float x, float y) { cursor.x = x; cursor.y = y; if (cursor.getVisibility() != View.VISIBLE) cursor.setVisibility(View.VISIBLE); cursor.invalidate(); }
+        private boolean mouseTouch(MotionEvent e) {
+            float x = e.getX(), y = e.getY(); mouseCursor(x, y); motion(x, y);
+            int a = e.getActionMasked(), bs = (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) ? 0 : e.getButtonState(), ch = bs ^ mouseBtns;
+            if ((ch & MotionEvent.BUTTON_PRIMARY) != 0) nativeButton(0, (bs & MotionEvent.BUTTON_PRIMARY) != 0 ? 1 : 0);
+            if ((ch & MotionEvent.BUTTON_SECONDARY) != 0) nativeButton(1, (bs & MotionEvent.BUTTON_SECONDARY) != 0 ? 1 : 0);
+            if ((ch & MotionEvent.BUTTON_TERTIARY) != 0) nativeButton(2, (bs & MotionEvent.BUTTON_TERTIARY) != 0 ? 1 : 0);
+            mouseBtns = bs; return true;
+        }
+        @Override public boolean onGenericMotionEvent(MotionEvent e) {
+            if (isMouse(e)) {
+                if (p.mouseMode == 1) return true;
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_HOVER_MOVE: case MotionEvent.ACTION_HOVER_ENTER: mouseCursor(e.getX(), e.getY()); motion(e.getX(), e.getY()); return true;
+                    case MotionEvent.ACTION_SCROLL: mouseCursor(e.getX(), e.getY()); motion(e.getX(), e.getY());
+                        nativeAxis(-e.getAxisValue(MotionEvent.AXIS_VSCROLL) * 15f * p.scrollSpeed * (p.invScroll ? -1 : 1)); return true;
+                    default: return true;
+                }
+            }
+            return super.onGenericMotionEvent(e);
+        }
+
         @Override public boolean onTouchEvent(MotionEvent e) {
+            if (isMouse(e)) { if (p.mouseMode == 1) return true; return mouseTouch(e); }
+            if (p.mouseMode == 2) return true;   // mouse-only mode: touches on the picture are ignored
+            if (p.touchMode == 0 && cursor.getVisibility() == View.VISIBLE) cursor.setVisibility(View.GONE);
             if (e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 3) {   // three fingers: menu
                 handler.removeCallbacks(longPress); if (leftDown) { nativeButton(0, 0); leftDown = false; } toggleMenu(); return true; }
             if (p.touchMode == 1) return padTouch(e);
@@ -370,10 +422,10 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
             o.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
             o.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_ACTION_NONE;
             return new BaseInputConnection(this, false) {
-                @Override public boolean commitText(CharSequence t, int p) { for (int i = 0; i < t.length(); i++) typeChar(t.charAt(i)); return true; }
+                @Override public boolean commitText(CharSequence t, int pos) { if (WlScreen.this.p.kbMode == 2) return true; for (int i = 0; i < t.length(); i++) typeChar(t.charAt(i), false); return true; }
                 @Override public boolean setComposingText(CharSequence t, int p) { return true; }
                 @Override public boolean finishComposingText() { return true; }
-                @Override public boolean deleteSurroundingText(int before, int after) { for (int i = 0; i < before; i++) { nativeKey(14, 1); nativeKey(14, 0); } return true; }
+                @Override public boolean deleteSurroundingText(int before, int after) { if (WlScreen.this.p.kbMode == 2) return true; for (int i = 0; i < before; i++) { nativeKey(14, 1); nativeKey(14, 0); } return true; }
                 @Override public boolean sendKeyEvent(KeyEvent e) { return handleKey(e); } };
         }
         @Override public boolean onKeyDown(int k, KeyEvent e) { return handleKey(e) || super.onKeyDown(k, e); }

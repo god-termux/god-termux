@@ -2,6 +2,7 @@ package wlcomp;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import java.io.File;
 
 /** Persisted settings of the Wayland window (modelled on Termux:X11's preference groups: display / pointer / keyboard). */
 final class WlPrefs {
@@ -17,10 +18,16 @@ final class WlPrefs {
     float sens = 1f, scrollSpeed = 1f, curSize = 1f; boolean accel = true, invScroll, tapClick = true, tapDrag = true, padButtons = true; int longMode;   // 0 hold LMB, 1 right click, 2 nothing
     // keyboard / chrome
     boolean keybar = true, menuBtn = true; float menuX = -1, menuY = -1;
+    // render: 0 platform GLES driver, 1 ANGLE (read by the native render loop from flag files in ~/.termux when the compositor starts)
+    int render; boolean bench;
+    int mouseMode;      // pointer source: 0 touch and physical mouse (auto), 1 touch only, 2 physical mouse only
+    int kbMode;         // keyboard input: 0 both (auto, duplicates dropped), 1 on-screen only, 2 hardware only
+    private final Context ctx;
 
     private final SharedPreferences sp;
     WlPrefs(Context c) {
-        sp = c.getSharedPreferences("wlcomp", Context.MODE_PRIVATE);
+        ctx = c; sp = c.getSharedPreferences("wlcomp", Context.MODE_PRIVATE);
+        render = sp.getInt("render", new File(c.getFilesDir(), "home/.termux/wl-angle").exists() ? 1 : 0); kbMode = sp.getInt("kbMode", 0); mouseMode = sp.getInt("mouseMode", 0); bench = sp.getBoolean("bench", new File(c.getFilesDir(), "home/.termux/wl-bench").exists());
         resMode = sp.getInt("resMode", 0); resPct = sp.getInt("resPct", 100); resW = sp.getInt("resW", 1280); resH = sp.getInt("resH", 720); fit = sp.getInt("fit", 0);
         uiScale = sp.getInt("uiScale", 0); orient = sp.getInt("orient", 0); fullscreen = sp.getBoolean("full", true); keepOn = sp.getBoolean("keepOn", true); cutout = sp.getBoolean("cutout", true);
         touchMode = sp.getInt("touchMode", sp.getBoolean("padmode", false) ? 1 : 0);
@@ -33,6 +40,11 @@ final class WlPrefs {
             .putBoolean("full", fullscreen).putBoolean("keepOn", keepOn).putBoolean("cutout", cutout).putInt("touchMode", touchMode)
             .putFloat("sens", sens).putFloat("scroll", scrollSpeed).putFloat("cur", curSize).putBoolean("accel", accel).putBoolean("inv", invScroll).putBoolean("tap", tapClick)
             .putBoolean("tapdrag", tapDrag).putBoolean("btns", padButtons).putInt("long", longMode).putBoolean("keybar", keybar).putBoolean("menuBtn", menuBtn)
-            .putFloat("menuX", menuX).putFloat("menuY", menuY).apply();
+            .putFloat("menuX", menuX).putFloat("menuY", menuY).putInt("render", render).putBoolean("bench", bench).putInt("kbMode", kbMode).putInt("mouseMode", mouseMode).apply();
+        flag("wl-angle", render == 1); flag("wl-bench", bench);
+    }
+    /** The native loop looks for these files when it starts (home/.termux inside the app's files dir = Termux $HOME/.termux). */
+    private void flag(String name, boolean on) {
+        try { File f = new File(ctx.getFilesDir(), "home/.termux/" + name); if (on) { f.getParentFile().mkdirs(); f.createNewFile(); } else f.delete(); } catch (Throwable ignored) {}
     }
 }
