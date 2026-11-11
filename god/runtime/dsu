@@ -1,0 +1,509 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# dsu: run commands as the Android "shell" user (uid 2000) through Shizuku (rish) or ADB wireless debugging.
+# NOT root, and NOT a Termux environment: Termux programs (python, git, bash...) live in /data/data/com.termux,
+# which uid 2000 cannot read. Use the g* wrappers (gpm, gam, gset, ...) to call system commands from normal Termux.
+#
+# Derived in part from tsu (option and --dbg conventions): Copyright (c) 2020, Cswl Coldwind <https://github.com/cswl>
+# Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby
+# granted, provided that the above copyright notice and this permission notice appear in all copies.
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES (see tsu LICENSE, ISC).
+
+DSU_VERSION="1.4.0-autoadb"
+P=${PREFIX:-/data/data/com.termux/files/usr}
+T=$P/tmp
+RD=/data/local/tmp/dsu
+WRAP_MARK="# dsu-wrapper"
+DEFAULT_WRAPPERS="pm am settings cmd dumpsys wm appops"
+export RISH_APPLICATION_ID=com.termux
+
+# ---- config: ~/.termux/dsu.conf (KEY=VALUE), flags override it ----------------------------------------------
+DSU_CHANNEL=""; DSU_EP=""; DSU_AUTOADB=${DSU_AUTOADB:-1}
+CONF=${DSU_CONF:-$HOME/.termux/dsu.conf}
+if [ -f "$CONF" ] && [ "$(stat -c %u "$CONF" 2>/dev/null)" = "$(id -u)" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF"
+fi
+
+_DSU_DEBUG=${_DSU_DEBUG:-}
+dbg() { [ -n "$_DSU_DEBUG" ] && echo "dsu: $*" >&2; return 0; }
+fail() { # fail MESSAGE  -> exit 125 (no privileged channel)
+  echo "dsu: $1" >&2; mkdir -p "$T" 2>/dev/null; printf '%s %s\n' "$(date +%F\ %T)" "$1" > "$T/dsu-last-error" 2>/dev/null; exit 125
+}
+
+usage() {
+cat <<EOF
+dsu $DSU_VERSION: команды от имени Android shell (uid 2000) через Shizuku (rish) или ADB. Это не root.
+Программ Termux (python, git, bash...) в сессии shell нет: shell не имеет доступа к /data/data/com.termux.
+Для системных команд из обычного Termux используйте обёртки g*: gpm gam gset gcmd gdumpsys gwm gappops.
+
+  dsu -c 'строка'                  выполнить строку как есть (совместимо с gsh -c)
+  dsu [ОПЦИИ] [--] КОМАНДА [АРГ…]  выполнить команду; аргументы экранируются (printf %q)
+  dsu [ОПЦИИ]                      интерактивный shell от uid 2000 (нужен терминал; канал adb)
+  dsu push ФАЙЛ…                   скопировать файлы в /data/local/tmp/dsu/bin (chmod 755)
+  dsu status                       канал, endpoint, uid удалённой стороны
+  dsu pair КОД [--pair-ep ХОСТ:ПОРТ]   сопряжение Беспроводной отладки
+  dsu --settings                   открыть «Для разработчиков»
+  dsu --tab [ОПЦИИ]                интерактивный dsu в новой вкладке Termux (через RUN_COMMAND)
+  dsu --restart-adb                выключить и включить Беспроводную отладку (мод dsuset), подключиться к новому порту
+  dsu --install-wrappers [ИМЯ…]    создать обёртки g<имя> в \$PREFIX/bin (по умолчанию: $DEFAULT_WRAPPERS)
+  dsu --remove-wrappers [ИМЯ…]     удалить только созданные dsu обёртки
+  dsu -h | --version
+
+Опции: --rish | --adb (канал; по умолчанию rish, при неудаче adb; интерактив по умолчанию через adb)
+       --ep ХОСТ:ПОРТ (endpoint ADB)   -t (PTY для одной команды: top, vi...)   --dbg (отладка)
+       -s ОБОЛОЧКА (удалённая, по умолчанию /system/bin/sh)   -p | -a (системный PATH перед / после /data/local/tmp/dsu/bin)
+       -E (передать LC_*, COLORTERM, TZ, DSU_*; всегда передаются HOME, TMPDIR, TERM, LANG)
+       --tx (эксперимент: команда tx в сессии shell выполняет программы в Termux; сервер на 127.0.0.1 с токеном живёт, пока идёт dsu; DSU_TX=1 в dsu.conf)
+Коды возврата: 125 нет канала, 126 программа Termux недоступна shell, остальные: код удалённой команды.
+Конфиг: ~/.termux/dsu.conf (DSU_CHANNEL=rish|adb, DSU_EP=ХОСТ:ПОРТ); флаги важнее файла.
+EOF
+}
+
+# ---- helpers ----------------------------------------------------------------------------------------------
+have_adb() { command -v adb >/dev/null 2>&1; }
+have_rish() { command -v rish >/dev/null 2>&1; }
+
+adb_state() { timeout 5 adb -s "$1" get-state 2>/dev/null; }
+# a connection can be listed as "device" for a while after wireless debugging went off (or the network changed): require a real round trip
+ep_alive() { [ "$(timeout 4 adb -s "$1" shell echo ok 2>/dev/null)" = ok ] || { adb disconnect "$1" >/dev/null 2>&1; return 1; }; }
+
+# find_ep: sets EP (and EP_NOTE). return 0 ok, 1 none, 2 several devices
+find_ep() {
+  EP=""; EP_NOTE=""
+  have_adb || return 1
+  if [ -n "$FORCE_EP" ] || [ -n "$DSU_EP" ]; then
+    EP=${FORCE_EP:-$DSU_EP}
+    if [ "$(adb_state "$EP")" != device ]; then timeout 5 adb connect "$EP" >/dev/null 2>&1; fi
+    [ "$(adb_state "$EP")" = device ] && ep_alive "$EP" && return 0
+    EP=""; return 1
+  fi
+  local devs n
+  devs=$(timeout 8 adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1}')
+  n=$(printf '%s' "$devs" | grep -c .)
+  if [ "$n" -gt 1 ]; then return 2; fi
+  if [ "$n" -eq 1 ]; then
+    if ep_alive "$devs"; then
+      EP=$devs
+      [ -s "$T/adb-connect-port" ] || EP_NOTE="endpoint из adb devices (adbfind не опубликовал adb-connect-port)"
+      return 0
+    fi
+    dbg "устройство $devs числилось подключённым, но не отвечает - отключено"
+  fi
+  local f
+  f=$(head -n1 "$T/adb-connect-port" 2>/dev/null)
+  if [ -n "$f" ]; then
+    timeout 5 adb connect "$f" >/dev/null 2>&1
+    if [ "$(adb_state "$f")" = device ] && ep_alive "$f"; then EP=$f; return 0; fi
+  fi
+  return 1
+}
+
+# rish cache: $T/dsu-channel = "rish up|down", valid 30 s
+CACHE=$T/dsu-channel
+cache_get() {
+  [ -f "$CACHE" ] || return 1
+  local age=$(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0) ))
+  [ "$age" -le 30 ] || return 1
+  awk '{print $2}' "$CACHE"
+}
+cache_set() { mkdir -p "$T" 2>/dev/null; echo "rish $1" > "$CACHE" 2>/dev/null; }
+
+rish_probe() { # 0 = rish works
+  have_rish || return 1
+  local out
+  out=$(timeout 3 env -u LD_PRELOAD -u LD_LIBRARY_PATH rish -c true 2>&1); local rc=$?
+  if [ $rc -eq 0 ] && [ -z "$out" ]; then cache_set up; return 0; fi
+  cache_set down; return 1
+}
+
+# ---- autoadb: when no channel exists and Wireless debugging is OFF, switch it on through the dsuset mod ----------
+# dsuset (external mod) listens for the broadcast dsu.ADB_WIFI and writes Settings.Global.adb_wifi_enabled (WRITE_SECURE_SETTINGS).
+adbwifi_result() { # adbwifi_result ARGS... : send the broadcast, wait up to 3 s for the mod's answer in $T/dsu-adbwifi.result
+  local res=$T/dsu-adbwifi.result i
+  rm -f "$res"
+  command -v am >/dev/null 2>&1 || return 1
+  timeout 15 am broadcast -a dsu.ADB_WIFI "$@" >/dev/null 2>&1
+  for i in 1 2 3 4 5 6; do [ -s "$res" ] && { cat "$res"; return 0; }; sleep 0.5; done
+  return 1
+}
+
+try_autoadb() { # 0 = connected (EP set)
+  [ "$DSU_AUTOADB" = 0 ] && return 1
+  have_adb || return 1
+  local st f i
+  st=$(adbwifi_result --es op get) || { dbg "autoadb: мод dsuset не ответил"; return 1; }
+  case "$st" in
+    adb_wifi_enabled=0) ;;
+    *) dbg "autoadb: отладка уже включена ($st), канала нет - нужен dsu pair"; return 1 ;;
+  esac
+  echo "dsu: Беспроводная отладка выключена, включаю (мод dsuset)…" >&2
+  # drop dead entries BEFORE the new connection: disconnecting them afterwards makes the fresh link blink offline
+  adb devices 2>/dev/null | awk 'NR>1 && $2=="offline" {print $1}' | while read -r o; do adb disconnect "$o" >/dev/null 2>&1; done
+  rm -f "$T/adb-connect-port"
+  adbwifi_result --ei value 1 >/dev/null
+  SECONDS=0; local retries=0
+  while [ "$SECONDS" -lt 25 ]; do
+    f=$(head -n1 "$T/adb-connect-port" 2>/dev/null)
+    if [ -n "$f" ]; then
+      timeout 5 adb connect "$f" >/dev/null 2>&1
+      # get-state can say "device" for a moment before the link goes offline again (handshake): require a real round trip
+      if [ "$(adb_state "$f")" = device ] && [ "$(timeout 5 adb -s "$f" shell echo ok 2>/dev/null)" = ok ]; then
+        EP=$f; echo "dsu: отладка включена, подключено: $f" >&2
+        return 0
+      fi
+      # Android switches Wireless debugging off by itself when the network changes (hotspot/Wi-Fi): switch it on again, twice at most
+      if [ "$retries" -lt 2 ] && [ "$(adbwifi_result --es op get 2>/dev/null)" = adb_wifi_enabled=0 ]; then
+        retries=$((retries+1)); dbg "autoadb: система выключила отладку (смена сети), включаю снова ($retries)"
+        rm -f "$T/adb-connect-port"; adbwifi_result --ei value 1 >/dev/null
+      fi
+    fi
+    sleep 0.5
+  done
+  echo "dsu: отладку включил, но подключиться за ~25 с не удалось. Адрес в файле порта может быть от другой сети (телефон переключил Wi-Fi) - повторите через минуту; если не поможет - нужен dsu pair." >&2
+  return 1
+}
+
+cmd_restart_adb() {
+  local r
+  have_adb || fail "adb не установлен: pkg install android-tools"
+  r=$(adbwifi_result --ei value 0) || fail "мод dsuset не отвечает (перезапустите Termux после установки мода; modbuild ~/mods-src/dsuset)"
+  echo "dsu: $r"; sleep 3
+  DSU_AUTOADB=1
+  if try_autoadb; then echo "dsu: Беспроводная отладка перезапущена: $EP"; else fail "отладку выключил, но включить и подключиться не удалось"; fi
+}
+
+# choose_channel: sets CH=rish|adb (and EP). exits 125 with a message when nothing works
+choose_channel() {
+  CH=""
+  case "$FORCE_CH" in
+    rish)
+      have_rish || fail "rish не найден: в Shizuku нажмите «Использовать Shizuku в терминальных приложениях» → Export files, положите rish в ~/.local/bin"
+      rish_probe || fail "Shizuku остановлен (Request timeout); запустите приложение Shizuku"
+      CH=rish; return ;;
+    adb)
+      have_adb || fail "adb не установлен: pkg install android-tools"
+      find_ep; case $? in
+        0) CH=adb; return ;;
+        2) fail "Несколько устройств: укажите --ep или DSU_EP" ;;
+        *) if try_autoadb; then CH=adb; return; fi
+           fail "Нет подключённого ADB. Включите Беспроводную отладку (dsu --settings), затем: dsu pair КОД" ;;
+      esac ;;
+  esac
+  local c; c=$(cache_get)
+  if [ "$c" = up ] || { [ "$c" != down ] && rish_probe; }; then CH=rish; dbg "канал: rish"; return; fi
+  dbg "Shizuku недоступен, канал adb"
+  have_adb || fail "Нет привилегированного канала: Shizuku не работает, а adb не установлен (pkg install android-tools)"
+  find_ep; case $? in
+    0) CH=adb; dbg "канал: adb $EP${EP_NOTE:+ ($EP_NOTE)}"; return ;;
+    2) fail "Несколько устройств: укажите --ep или DSU_EP" ;;
+    *) if try_autoadb; then CH=adb; dbg "канал: adb $EP (отладка включена автоматически)"; return; fi
+       fail "Нет привилегированного канала. Включите Беспроводную отладку (dsu --settings) или запустите Shizuku. После включения: dsu pair КОД" ;;
+  esac
+}
+
+# remote STRING: run STRING on the remote side with the chosen channel; returns remote exit code
+remote() {
+  local s=$1
+  dbg "удалённая строка: $s"
+  if [ "$CH" = rish ]; then
+    [ -n "$TTY" ] && echo "dsu: -t игнорируется для rish (нет PTY)" >&2
+    env -u LD_PRELOAD -u LD_LIBRARY_PATH rish -c "$s"
+  else
+    if [ -n "$TTY" ]; then adb -s "$EP" shell -t "$s"; else adb -s "$EP" shell "$s"; fi
+  fi
+}
+
+# ---- subcommands ------------------------------------------------------------------------------------------
+cmd_status() {
+  DSU_AUTOADB=0   # status only looks, it never switches debugging on
+  echo "dsu $DSU_VERSION"
+  if have_adb; then echo "adb: $(command -v adb)"; else echo "adb: не установлен (pkg install android-tools)"; fi
+  if have_rish; then
+    if rish_probe; then echo "rish (Shizuku): работает"; else echo "rish (Shizuku): не отвечает (остановлен или Request timeout)"; fi
+  else echo "rish: не найден"; fi
+  echo "adb_wifi_enabled (dsuset): $(adbwifi_result --es op get 2>/dev/null || echo 'мод dsuset не отвечает')"
+  echo "adb-connect-port: $(head -n1 "$T/adb-connect-port" 2>/dev/null || true)$([ -s "$T/adb-connect-port" ] || echo "нет файла")"
+  echo "adb-pair-port: $(head -n1 "$T/adb-pair-port" 2>/dev/null || true)$([ -s "$T/adb-pair-port" ] || echo "нет (окно сопряжения закрыто)")"
+  if have_adb; then
+    find_ep; local r=$?
+    case $r in
+      0) echo "adb endpoint: $EP ($(adb_state "$EP"))${EP_NOTE:+ - $EP_NOTE}" ;;
+      2) echo "adb endpoint: несколько устройств, укажите --ep" ;;
+      *) echo "adb endpoint: нет подключённого устройства (dsu pair КОД)" ;;
+    esac
+  fi
+  FORCE_CH=""; local old_dbg=$_DSU_DEBUG
+  if ( choose_channel ) >/dev/null 2>&1; then
+    # choose again in this shell (subshell above only tested it)
+    choose_channel
+    echo "выбранный канал: $CH${EP:+ ($EP)}"
+    echo -n "удалённая сторона: "; remote 'id' 2>&1 | head -n1
+  else
+    echo "выбранный канал: нет"
+  fi
+  _DSU_DEBUG=$old_dbg
+  [ -s "$T/dsu-last-error" ] && echo "последняя ошибка: $(cat "$T/dsu-last-error")"
+  return 0
+}
+
+cmd_pair() {
+  local code="" pep=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --pair-ep) pep=$2; shift 2 ;;
+      *) code=$1; shift ;;
+    esac
+  done
+  case "$code" in [0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) echo "usage: dsu pair 6-ЗНАЧНЫЙ-КОД [--pair-ep ХОСТ:ПОРТ]" >&2; echo "(Параметры → Для разработчиков → Беспроводная отладка → Подключить устройство с помощью кода; окно держите открытым)" >&2; exit 2 ;; esac
+  have_adb || fail "adb не установлен: pkg install android-tools"
+  [ -n "$pep" ] || pep=$(head -n1 "$T/adb-pair-port" 2>/dev/null)
+  [ -n "$pep" ] || fail "Нет окна сопряжения: откройте «Подключить устройство с помощью кода» (или укажите --pair-ep ХОСТ:ПОРТ)"
+  timeout 20 adb pair "$pep" "$code" || exit $?
+  sleep 1.5
+  local c; c=$(head -n1 "$T/adb-connect-port" 2>/dev/null)
+  [ -n "$c" ] && timeout 8 adb connect "$c"
+  return 0
+}
+
+# wrapper name for a remote command: g<cmd>, except settings -> gset (gsettings is glib's own program).
+# An entry may also be CMD:WRAPPER for a custom name.
+wname() { case "$1" in settings) echo gset ;; *:*) echo "${1#*:}" ;; *) echo "g$1" ;; esac; }
+wcmd() { echo "${1%%:*}"; }
+
+cmd_install_wrappers() {
+  mkdir -p "$P/bin"
+  local names=("$@"); [ ${#names[@]} -gt 0 ] || names=($DEFAULT_WRAPPERS)
+  local n w c g
+  for n in "${names[@]}"; do
+    g=$(wname "$n"); c=$(wcmd "$n"); w=$P/bin/$g
+    if [ -e "$w" ] && ! grep -q "^$WRAP_MARK\$" "$w" 2>/dev/null; then
+      echo "$g: пропущено, имя занято чужим файлом ($w)"; continue
+    fi
+    printf '%s\n%s\nexec dsu -- %s "$@"\n' "#!/data/data/com.termux/files/usr/bin/bash" "$WRAP_MARK" "$c" > "$w"
+    chmod 755 "$w"; echo "$g -> dsu -- $c"
+  done
+}
+
+cmd_remove_wrappers() {
+  local names=("$@") f n g
+  if [ ${#names[@]} -gt 0 ]; then
+    for n in "${names[@]}"; do g=$(wname "$n"); f=$P/bin/$g
+      if [ -f "$f" ] && grep -q "^$WRAP_MARK\$" "$f"; then rm -f "$f"; echo "удалено $g"; else echo "$g: нет такой обёртки dsu"; fi
+    done
+  else
+    for f in "$P"/bin/g*; do
+      [ -f "$f" ] && [ "$(stat -c %s "$f")" -lt 512 ] && grep -q "^$WRAP_MARK\$" "$f" && { rm -f "$f"; echo "удалено $(basename "$f")"; }
+    done
+  fi
+  return 0
+}
+
+
+# ---- environment passed to the remote side (the remote environment is created fresh by adbd/Shizuku) ---------
+pass_env() { # prints "K=V K=V ..." for the remote side
+  local out="HOME=$RD/home TMPDIR=$RD/tmp TERM=${TERM:-xterm-256color}" k v
+  [ -n "$LANG" ] && out="$out LANG=$(printf %q "$LANG")"
+  [ -n "$TX_PORT" ] && out="$out DSU_TX_PORT=$TX_PORT DSU_TX_TOKEN=$TX_TOKEN"
+  [ -n "$TX_PORT" ] && [ -t 0 ] && [ -z "$TTY" ] && out="$out DSU_TX_NOSTDIN=1"
+  if [ -n "$PASS_ENV" ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in LC_*|COLORTERM|TZ|DSU_*) [ "$k" = DSU_CHANNEL ] || [ "$k" = DSU_EP ] || out="$out $k=$(printf %q "$v")" ;; esac
+    done < <(env)
+  fi
+  printf '%s' "$out"
+}
+
+
+# ---- tx: reverse bridge shell -> Termux (experimental, off by default; see dsu-tx-server.py) -----------------
+TX=${DSU_TX:-}
+TX_PID=""; TX_PORT=""; TX_TOKEN=""
+tx_body() {
+cat <<'TXEOF'
+#!/system/bin/sh
+# tx: run a Termux program from a `dsu --tx` shell session. Output is stdout+stderr merged; exit code is the program's.
+[ -n "$DSU_TX_PORT" ] && [ -n "$DSU_TX_TOKEN" ] || { echo "tx: нет DSU_TX_PORT/DSU_TX_TOKEN: запустите dsu --tx" >&2; exit 125; }
+nostdin=${DSU_TX_NOSTDIN:-}
+if [ "$1" = "-n" ]; then nostdin=1; shift; fi
+[ "$1" = "--" ] && shift
+[ $# -gt 0 ] || { echo "usage: tx [-n] КОМАНДА [АРГ…]   (выполняется в Termux, а не в shell; без терминала/PTY; -n: не передавать stdin)" >&2; exit 2; }
+id=$(head -c 12 /dev/urandom | base64 | tr -d '/+=\n')
+argv=$(printf '%s\0' "$@" | base64 | tr -d '\n')
+cwdb=$(printf %s "$(pwd)" | base64 | tr -d '\n')
+# stdin is forwarded only when it is not a terminal and -n was not given; the command finishes only when stdin reaches EOF
+if [ -t 0 ] || [ -n "$nostdin" ]; then exec </dev/null; fi
+{ printf '%s\n' "$DSU_TX_TOKEN" "run $id" "$cwdb" "$argv"; cat; } | toybox nc 127.0.0.1 "$DSU_TX_PORT"
+n=$?
+[ $n -eq 0 ] || { echo "tx: нет связи с сервером dsu --tx (nc rc=$n)" >&2; exit 125; }
+rc=$(printf '%s\n' "$DSU_TX_TOKEN" "status $id" | toybox nc 127.0.0.1 "$DSU_TX_PORT")
+case "$rc" in ''|*[!0-9]*) echo "tx: сервер не вернул код возврата ($rc)" >&2; exit 125 ;; esac
+exit $rc
+TXEOF
+}
+
+tx_stop() { [ -n "$TX_PID" ] && kill "$TX_PID" 2>/dev/null; TX_PID=""; }
+
+tx_start() {
+  local srv pf i
+  command -v python3 >/dev/null 2>&1 || fail "для --tx нужен python3 (pkg install python)"
+  for srv in "$(dirname "$(readlink -f "$0")")/dsu-tx-server.py" "$P/bin/dsu-tx-server.py"; do [ -f "$srv" ] && break; srv=""; done
+  [ -n "$srv" ] || fail "dsu-tx-server.py не найден рядом с dsu"
+  TX_TOKEN=$(head -c 32 /dev/urandom | base64 -w0 | tr -d '/+=')
+  pf=$T/dsu-tx-port.$$; rm -f "$pf"
+  DSU_TX_TOKEN=$TX_TOKEN DSU_TX_PORTFILE=$pf python3 -I "$srv" >/dev/null 2>&1 &
+  TX_PID=$!
+  trap tx_stop EXIT
+  for i in $(seq 30); do [ -s "$pf" ] && break; kill -0 "$TX_PID" 2>/dev/null || break; sleep 0.2; done
+  TX_PORT=$(cat "$pf" 2>/dev/null); rm -f "$pf"
+  [ -n "$TX_PORT" ] || fail "сервер tx не запустился (лог: $T/dsu-tx.log)"
+  dbg "tx: сервер pid $TX_PID, порт 127.0.0.1:$TX_PORT"
+}
+
+# remote snippet that installs the tx client when its hash differs
+tx_sync_snippet() {
+  local body hash b64
+  body=$(tx_body); hash=$(printf '%s\n' "$body" | sha256sum | cut -d' ' -f1)
+  b64=$( { printf '%s\n' "$body" | sed -n 1p; printf '# dsu-tx sha256=%s\n' "$hash"; printf '%s\n' "$body" | sed -n '2,$p'; } | base64 -w0)
+  printf '[ "$(sed -n 2p %s/bin/tx 2>/dev/null)" = "# dsu-tx sha256=%s" ] || { echo %s | base64 -d > %s/bin/tx; chmod 755 %s/bin/tx; }' "$RD" "$hash" "$b64" "$RD" "$RD"
+}
+
+# ---- remote rc file for the interactive shell (mksh reads $ENV for interactive shells) -----------------------
+rc_body() {
+cat <<'RCEOF'
+DSU=1; export DSU
+_H=$(getprop ro.product.device 2>/dev/null); [ -n "$_H" ] || _H=android
+PS1="dsu:shell@$_H:\$PWD \$ "
+alias ll='ls -l'; alias la='ls -la'
+case "$DSU_PATH_ORDER" in a) PATH="$DSU_BIN:$PATH" ;; *) PATH="$PATH:$DSU_BIN" ;; esac
+export PATH
+for _n in python python3 pip git vim nano pkg apt bash; do
+  command -v $_n >/dev/null 2>&1 || eval "$_n() { echo \"dsu: $_n - программа Termux; shell (uid 2000) не имеет доступа к /data/data/com.termux. Откройте обычную вкладку Termux${DSU_TX_PORT:+ или выполните: tx $_n …}.\" >&2; return 126; }"
+done
+unset _n _H
+echo "dsu: shell uid 2000 (не root). Программ Termux здесь нет - для них обычная вкладка."
+echo "dsu: системные команды из Termux: gpm gam gset gcmd gdumpsys gwm gappops (dsu --install-wrappers)."
+[ -n "$DSU_TX_PORT" ] && echo "dsu: tx КОМАНДА - выполнить программу в Termux (python3, git…) без терминала; вывод stdout+stderr."
+RCEOF
+}
+
+cmd_interactive() {
+  case "$SHELL_R" in /data/data/com.termux*|"$P"*)
+    echo "dsu: оболочка $SHELL_R лежит в Termux, недоступна shell (uid 2000). Используйте системную: /system/bin/sh, /system/bin/mksh." >&2; exit 2 ;; esac
+  [ -t 0 ] && [ -t 1 ] || { echo "dsu: интерактивный режим требует терминал. Для одной команды: dsu КОМАНДА…  или  dsu -t -c 'sh -c …'" >&2; exit 2; }
+  [ -n "$SHELL_R" ] || SHELL_R=/system/bin/sh
+  # interactive prefers adb (PTY verified); rish only when forced or adb is unavailable
+  if [ -z "$FORCE_CH" ]; then FORCE_CH=adb; if ! have_adb || ! find_ep; then FORCE_CH=""; fi; fi
+  choose_channel
+  if [ "$CH" = rish ]; then echo "dsu: интерактив через rish не проверен (PTY у Shizuku неизвестен); если нет приглашения, используйте --adb" >&2; fi
+  [ -n "$TX" ] && tx_start
+  local body hash b64 cwd pre rcline
+  body=$(rc_body); hash=$(printf '%s\n' "$body" | sha256sum | cut -d' ' -f1)
+  b64=$( { printf '# dsu-rc sha256=%s\n' "$hash"; printf '%s\n' "$body"; } | base64 -w0)
+  cwd=$RD/home
+  case "$PWD" in /sdcard*|/storage/*) cwd=$PWD ;; "$P"*|/data/data/com.termux*) dbg "cwd внутри Termux пропущен" ;; esac
+  rcline="[ \"\$(head -n1 $RD/rc.sh 2>/dev/null)\" = \"# dsu-rc sha256=$hash\" ] || echo $b64 | base64 -d > $RD/rc.sh"
+  pre="mkdir -p $RD/home $RD/tmp $RD/bin 2>/dev/null; $rcline;${TX_PORT:+ $(tx_sync_snippet);} test -x $SHELL_R || { echo \"dsu: $SHELL_R не найден на удалённой стороне\" >&2; exit 127; }; cd $(printf %q "$cwd") 2>/dev/null || cd $RD/home"
+  local str="$pre; $(pass_env) ENV=$RD/rc.sh DSU_BIN=$RD/bin DSU_PATH_ORDER=$PATH_ORDER exec $SHELL_R -i"
+  TTY=1; remote "$str"; local rc=$?
+  if [ $rc -ne 0 ] && [ "$CH" = adb ] && [ "$(adb_state "$EP")" != device ]; then
+    echo "dsu: Соединение ADB потеряно (порт меняется при каждом включении отладки). Включите отладку заново, dsu подключится сам." >&2
+  fi
+  exit $rc
+}
+
+cmd_push() {
+  [ $# -gt 0 ] || { echo "usage: dsu push ФАЙЛ…" >&2; exit 2; }
+  FORCE_CH=adb; choose_channel
+  local f dest
+  adb -s "$EP" shell "mkdir -p $RD/bin" 2>/dev/null
+  for f in "$@"; do
+    [ -f "$f" ] || { echo "dsu: нет файла $f" >&2; continue; }
+    case "$(readlink -f "$f")" in "$P"/*) if [ "$(head -c4 "$f" | od -An -tx1 | tr -d ' ')" = 7f454c46 ]; then
+      echo "dsu: предупреждение: $f - ELF из Termux; в нём прописаны пути /data/data/com.termux..., на стороне shell он, скорее всего, не заработает" >&2; fi ;; esac
+    dest=$RD/bin/$(basename "$f")
+    if out=$(adb -s "$EP" push "$f" "$dest" 2>&1); then adb -s "$EP" shell "chmod 755 $(printf %q "$dest")" && echo "$f -> $dest"; else echo "dsu: push $f не удался: $out" >&2; fi
+  done
+}
+
+# dsu --tab [ОПЦИИ]: open interactive dsu in a new Termux tab (RunCommandService; the session only starts once it is shown)
+cmd_tab() {
+  local a joined=""
+  for a in "$@"; do case "$a" in *,*) echo "dsu: --tab: запятая в аргументе не поддерживается ($a)" >&2; exit 2 ;; esac; joined="${joined:+$joined,}$a"; done
+  am startservice -n com.termux/com.termux.app.RunCommandService -a com.termux.RUN_COMMAND \
+    --es com.termux.RUN_COMMAND_PATH "$P/bin/dsu" ${joined:+--esa com.termux.RUN_COMMAND_ARGUMENTS "$joined"} \
+    --es com.termux.RUN_COMMAND_WORKDIR "$PWD" --ez com.termux.RUN_COMMAND_BACKGROUND false \
+    --es com.termux.RUN_COMMAND_SESSION_ACTION 0 >/dev/null 2>&1 \
+    && echo "dsu: открыта новая вкладка Termux" || { echo "dsu: не удалось запустить RunCommandService (allow-external-apps=true в ~/.termux/termux.properties?)" >&2; exit 1; }
+}
+
+cmd_settings() {
+  am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS >/dev/null 2>&1 \
+    && echo "Открыто: Для разработчиков" || echo "Не удалось открыть настройки; откройте «Для разработчиков» вручную" >&2
+}
+
+# ---- argument parsing -------------------------------------------------------------------------------------
+FORCE_CH=$DSU_CHANNEL; FORCE_EP=""; TTY=""; RAW=""; SHELL_R=""; PATH_ORDER=p; PASS_ENV=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c) [ $# -ge 2 ] || { usage >&2; exit 2; }; RAW=$2; shift 2; break ;;
+    --rish) FORCE_CH=rish; shift ;;
+    --adb) FORCE_CH=adb; shift ;;
+    --ep) [ $# -ge 2 ] || { usage >&2; exit 2; }; FORCE_EP=$2; shift 2 ;;
+    -t) TTY=1; shift ;;
+    --dbg) _DSU_DEBUG=1; shift ;;
+    --tx) TX=1; shift ;;
+    --no-autoadb) DSU_AUTOADB=0; shift ;;
+    --restart-adb) cmd_restart_adb; exit $? ;;
+    -h|--help) usage; exit 0 ;;
+    --version) echo "dsu $DSU_VERSION"; exit 0 ;;
+    --install-wrappers) shift; cmd_install_wrappers "$@"; exit 0 ;;
+    --remove-wrappers) shift; cmd_remove_wrappers "$@"; exit 0 ;;
+    --settings) cmd_settings; exit $? ;;
+    --tab) shift; cmd_tab "$@"; exit $? ;;
+    -s) [ $# -ge 2 ] || { usage >&2; exit 2; }; SHELL_R=$2; shift 2 ;;
+    -p) PATH_ORDER=p; shift ;;
+    -a) PATH_ORDER=a; shift ;;
+    -E) PASS_ENV=1; shift ;;
+    --) shift; break ;;
+    -*) echo "dsu: неизвестная опция $1 (dsu -h)" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+
+[ -n "$RAW" ] && [ $# -gt 0 ] && echo "dsu: предупреждение: аргументы после -c игнорируются ($*); для точной передачи используйте: dsu КОМАНДА арг…" >&2
+
+# subcommands only when not forced into command mode by "--" and no raw string
+if [ -z "$RAW" ] && [ $# -gt 0 ]; then
+  case "$1" in
+    status) shift; cmd_status; exit $? ;;
+    pair) shift; cmd_pair "$@"; exit $? ;;
+    push) shift; cmd_push "$@"; exit $? ;;
+  esac
+fi
+
+if [ -z "$RAW" ] && [ $# -eq 0 ]; then
+  cmd_interactive
+fi
+
+choose_channel
+[ -n "$EP_NOTE" ] && dbg "$EP_NOTE"
+
+if [ -n "$RAW" ]; then
+  remote "$RAW"; exit $?
+fi
+
+# command mode: arguments escaped with printf %q (verified byte-exact against the remote mksh)
+q=$(printf '%q ' "$@")
+[ -n "$TX" ] && tx_start
+pre="mkdir -p $RD/home $RD/tmp $RD/bin 2>/dev/null;${TX_PORT:+ $(tx_sync_snippet);} $(pass_env)${TX_PORT:+ PATH=\$PATH:$RD/bin}"
+remote "$pre $q"
+rc=$?
+if [ $rc -eq 127 ]; then
+  prog=$(command -v -- "$1" 2>/dev/null)
+  case "$prog" in
+    "$P"/*)
+      echo "dsu: «$1» - программа Termux ($prog). Процесс shell (uid 2000) не имеет доступа к /data/data/com.termux." >&2
+      echo "dsu: запустите её в обычной вкладке Termux. Системные аналоги: ls/grep/sed/awk/tar/ps/top/vi - toybox." >&2
+      exit 126 ;;
+  esac
+fi
+exit $rc

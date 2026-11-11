@@ -64,7 +64,7 @@ PATH=$PREFIX/glibc/bin:$PATH aarch64-linux-gnu-gcc -shared -fPIC -O2 -DGLIBC_BUI
 clang -O2 -o $A/glibc/shim/fhs-run $F/fhs-run.c
 clang -shared -fPIC -O2 -o $A/glibc/shim/libdapt-nolink.so god/runtime/nolink.c   # dapt: hard link -> copy fallback
 (cd $A/glibc/shim && sha256sum libfhs-bionic.so libfhs-glibc.so fhs-run libdapt-nolink.so > SHA256SUMS)
-cp god/runtime/dapt god/runtime/gsh god/runtime/wlrun god/runtime/xfce-wl $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
+cp god/runtime/dapt god/runtime/gsh god/runtime/dsu god/runtime/dsu-tx-server.py god/runtime/wlrun god/runtime/xfce-wl $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
 
 # 5. Gradle (aapt2 from Termux; the SDK's x86 aapt2 cannot run here)
 chmod +x gradlew
