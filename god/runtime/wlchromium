@@ -20,4 +20,13 @@ if [ "${WLCHROMIUM_GPU:-}" = panvk ]; then
 fi
 export WLC_FLAGS="--ozone-platform=wayland --no-sandbox --disable-dev-shm-usage $GPU_FLAGS --user-data-dir=$XDG_CONFIG_HOME/profile-${WLCHROMIUM_GPU:-sw} $WLCHROMIUM_FLAGS"
 # shellcheck disable=SC2016
-exec "$F" "$P/bin/sh" -c 'exec dbus-run-session -- /usr/bin/chromium $WLC_FLAGS "$@"' sh "$@"
+# A session bus WITHOUT service activation (no servicedir): otherwise Chromium makes D-Bus start xfce4-notifyd (fails: our compositor has no wlr-layer-shell, shows an error window)
+# and gnome-keyring ("Choose password for new keyring" window). --password-store=basic keeps Chromium from asking for a keyring at all.
+DBCONF=$P/tmp/wlchromium-dbus.conf
+cat > "$DBCONF" <<EOF2
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig><type>session</type><listen>unix:tmpdir=$P/tmp</listen><auth>EXTERNAL</auth>
+<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/></policy></busconfig>
+EOF2
+export WLC_FLAGS="$WLC_FLAGS --password-store=basic"
+exec "$F" "$P/bin/sh" -c "exec dbus-run-session --config-file=$DBCONF -- /usr/bin/chromium \$WLC_FLAGS \"\$@\"" sh "$@"
