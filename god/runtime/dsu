@@ -86,6 +86,13 @@ find_ep() {
     if [ -n "$pub" ] && printf '%s\n' "$devs" | grep -qxF "$pub" && ep_alive "$pub"; then
       EP=$pub; EP_NOTE="несколько адресов устройства, выбран опубликованный adbfind"; return 0
     fi
+    # all entries share one port: it is the same phone reachable through several addresses (the published endpoint may be stale)
+    if [ "$(printf '%s\n' "$devs" | sed 's/.*://' | sort -u | grep -c .)" -eq 1 ]; then
+      local d
+      for d in $devs; do
+        if ep_alive "$d"; then EP=$d; EP_NOTE="несколько адресов одного устройства, выбран отвечающий"; return 0; fi
+      done
+    fi
     return 2
   fi
   if [ "$n" -eq 1 ]; then
