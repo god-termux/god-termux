@@ -6,7 +6,8 @@
 P=${PREFIX:-/data/data/com.termux/files/usr}; D=$P/debian; F=$P/glibc/shim/fhs-run
 [ -x "$D/usr/bin/chromium" ] || { echo "wlchromium: Debian chromium missing. Run: dapt update && dapt install -y --no-install-recommends chromium" >&2; exit 1; }
 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=$P/tmp wlrun --open || exit 1
-export XDG_RUNTIME_DIR=$P/tmp WAYLAND_DISPLAY=wayland-0 FHS_DEBIAN=1 XDG_DATA_DIRS=/usr/share XDG_CONFIG_DIRS=/etc/xdg NO_AT_BRIDGE=1
+# WLCHROMIUM_DISPLAY=wayland-1 runs it inside the nested labwc (xfce-wl) instead, for comparisons
+export XDG_RUNTIME_DIR=$P/tmp WAYLAND_DISPLAY=${WLCHROMIUM_DISPLAY:-wayland-0} FHS_DEBIAN=1 XDG_DATA_DIRS=/usr/share XDG_CONFIG_DIRS=/etc/xdg NO_AT_BRIDGE=1
 export XDG_CONFIG_HOME=$HOME/.config/god-chromium XDG_CACHE_HOME=$HOME/.cache/god-chromium
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 export WLC_FLAGS="--ozone-platform=wayland --no-sandbox --disable-dev-shm-usage --disable-gpu --user-data-dir=$XDG_CONFIG_HOME/profile $WLCHROMIUM_FLAGS"
