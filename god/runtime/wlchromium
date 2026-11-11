@@ -18,7 +18,8 @@ if [ "${WLCHROMIUM_GPU:-}" = panvk ]; then
   # Chromium refuses its own Skia-Vulkan output on ozone-wayland ("not compatible with Vulkan"): PanVK is used by ANGLE (GL on top of Vulkan) only
   GPU_FLAGS="--use-gl=angle --use-angle=vulkan --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE --ignore-gpu-blocklist --enable-gpu-rasterization --enable-accelerated-2d-canvas --canvas-oop-rasterization"
 fi
-export WLC_FLAGS="--ozone-platform=wayland --no-sandbox --disable-dev-shm-usage $GPU_FLAGS --user-data-dir=$XDG_CONFIG_HOME/profile-${WLCHROMIUM_GPU:-sw} $WLCHROMIUM_FLAGS"
+# --disable-frame-rate-limit --disable-gpu-vsync: Chromium otherwise caps itself at ~60 fps even on a 120 Hz display (light page: 64 -> 113 fps); our compositor paces the frames (frame callbacks)
+export WLC_FLAGS="--ozone-platform=wayland --no-sandbox --disable-dev-shm-usage --disable-frame-rate-limit --disable-gpu-vsync $GPU_FLAGS --user-data-dir=$XDG_CONFIG_HOME/profile-${WLCHROMIUM_GPU:-sw} $WLCHROMIUM_FLAGS"
 # shellcheck disable=SC2016
 # A session bus WITHOUT service activation (no servicedir): otherwise Chromium makes D-Bus start xfce4-notifyd (fails: our compositor has no wlr-layer-shell, shows an error window)
 # and gnome-keyring ("Choose password for new keyring" window). --password-store=basic keeps Chromium from asking for a keyring at all.
