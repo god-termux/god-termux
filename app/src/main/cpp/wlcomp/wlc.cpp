@@ -342,9 +342,10 @@ void wm_bind(wl_client* c, void*, uint32_t v, uint32_t id) { wl_resource* r = wl
 // ---------------------------------------------------------------------------------------------------- wl_output / wl_seat
 void out_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 const struct wl_output_interface out_impl = {out_release};
+int REFRESH_MHZ = 60000;   // announced in wl_output.mode; Chromium paces its frames by it, so it must be the real display rate (set by wlc_set_refresh)
 void send_output(wl_resource* r) {
   wl_output_send_geometry(r, 0, 0, 65, 145, WL_OUTPUT_SUBPIXEL_UNKNOWN, "god", "termux", WL_OUTPUT_TRANSFORM_NORMAL);
-  wl_output_send_mode(r, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, OW, OH, 60000);
+  wl_output_send_mode(r, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, OW, OH, REFRESH_MHZ);
   if (wl_resource_get_version(r) >= WL_OUTPUT_SCALE_SINCE_VERSION) wl_output_send_scale(r, SCALE);
   if (wl_resource_get_version(r) >= WL_OUTPUT_DONE_SINCE_VERSION) wl_output_send_done(r);
 }
@@ -444,6 +445,10 @@ void wlc_clean(int id) { for (Surf* s : order) if (s->id == id) s->dirty = false
 void wlc_frame_done(void) {
   uint32_t t = now_ms();
   for (Surf* s : std::vector<Surf*>(order)) { std::vector<wl_resource*> f; f.swap(s->frames); for (wl_resource* cb : f) { wl_callback_send_done(cb, t); wl_resource_destroy(cb); } }
+}
+void wlc_set_refresh(int mhz) {
+  if (mhz < 20000 || mhz > 360000 || mhz == REFRESH_MHZ) return; REFRESH_MHZ = mhz;
+  for (wl_resource* o : outputs) send_output(o);
 }
 void wlc_resize(int w, int h) {
   if (w == OW && h == OH) return; OW = w; OH = h;

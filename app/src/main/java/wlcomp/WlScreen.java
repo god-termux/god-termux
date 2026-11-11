@@ -42,6 +42,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
     static { System.loadLibrary("wlcomp"); }
     static native void nativeSurface(Surface s, String runtimeDir, int w, int h, int scale);
     static native void nativeResize(int w, int h);
+    static native void nativeRefresh(int millihertz);
     static native void nativeScale(int scale);
     static native void nativeStop();
     static native boolean nativeRunning();
@@ -316,6 +317,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         @Override public void surfaceCreated(SurfaceHolder h) {}
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) {
             nativeSurface(h.getSurface(), new File(act.getFilesDir(), "usr/tmp").getAbsolutePath(), w, hh, curScale); lastSentScale = curScale;
+            try { nativeRefresh(Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f)); } catch (Throwable ignored) {}
         }
         @Override public void surfaceDestroyed(SurfaceHolder h) { nativeSurface(null, "", 0, 0, 0); }
 

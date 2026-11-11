@@ -20,6 +20,7 @@ int  wlc_windows(struct WlcWin* out, int max);   // bottom -> top
 void wlc_clean(int id);
 void wlc_frame_done(void);                // call after every presented frame
 void wlc_resize(int px_w, int px_h);
+void wlc_set_refresh(int millihertz);       // display refresh rate announced to clients (wl_output.mode)
 int  wlc_scale(void);
 void wlc_set_scale(int scale);             // change the output scale at runtime (re-announces the output, re-configures toplevels)
 void wlc_stop(void);

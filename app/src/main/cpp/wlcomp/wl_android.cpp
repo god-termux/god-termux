@@ -182,7 +182,7 @@ static bool loadGraphics(bool angle) {
 long now_us() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000L + t.tv_nsec / 1000; }
 
 namespace {
-std::thread th; std::atomic<bool> running{false}, resizeReq{false}; std::atomic<int> reqW{0}, reqH{0}, scaleReq{0};
+std::thread th; std::atomic<bool> running{false}, resizeReq{false}; std::atomic<int> reqW{0}, reqH{0}, scaleReq{0}, refreshReq{0};
 std::mutex wm; ANativeWindow* newWin = nullptr; bool winChanged = false;   // handed over from the UI thread
 std::string rtDir; int startW = 0, startH = 0, startScale = 2;
 
@@ -225,6 +225,7 @@ void renderLoop() {
           else texs.clear();   // textures belong to the old context state after a surface change: recreate lazily
         }
       } }
+    { int rr = refreshReq.exchange(0); if (rr) wlc_set_refresh(rr); }
     { int sr = scaleReq.exchange(0); if (sr) { wlc_set_scale(sr); force = true; } }
     if (resizeReq.exchange(false)) { W = reqW; H = reqH; wlc_resize(W, H); force = true; }
     if (bench && surf != EGL_NO_SURFACE && ready) force = true;   // bench: redraw (and re-upload every window) on each pass
@@ -278,6 +279,7 @@ JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeSurface(JNIEnv* e, jclass, job
     if (th.joinable()) th.join(); running = true; th = std::thread(renderLoop);
   } else if (nw) { reqW = w; reqH = h; resizeReq = true; }
 }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeRefresh(JNIEnv*, jclass, jint mhz) { refreshReq = mhz; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeResize(JNIEnv*, jclass, jint w, jint h) { reqW = w; reqH = h; resizeReq = true; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeScale(JNIEnv*, jclass, jint s) { scaleReq = s; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeStop(JNIEnv*, jclass) { running = false; if (th.joinable()) th.join(); }
