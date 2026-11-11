@@ -80,7 +80,14 @@ find_ep() {
   local devs n
   devs=$(timeout 8 adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1}')
   n=$(printf '%s' "$devs" | grep -c .)
-  if [ "$n" -gt 1 ]; then return 2; fi
+  if [ "$n" -gt 1 ]; then
+    # the same phone can be connected through several addresses (Wi-Fi and hotspot): prefer the endpoint adbfind published
+    local pub; pub=$(head -n1 "$T/adb-connect-port" 2>/dev/null)
+    if [ -n "$pub" ] && printf '%s\n' "$devs" | grep -qxF "$pub" && ep_alive "$pub"; then
+      EP=$pub; EP_NOTE="несколько адресов устройства, выбран опубликованный adbfind"; return 0
+    fi
+    return 2
+  fi
   if [ "$n" -eq 1 ]; then
     if ep_alive "$devs"; then
       EP=$devs
