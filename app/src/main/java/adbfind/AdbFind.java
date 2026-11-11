@@ -21,6 +21,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.InputStreamReader;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /** Finds Android's wireless-debugging endpoints via mDNS and publishes them for the `gsh` command:
@@ -33,6 +34,7 @@ public class AdbFind implements Mod {
     final Handler h = new Handler(Looper.getMainLooper());
     final ConcurrentLinkedQueue<Object[]> queue = new ConcurrentLinkedQueue<>(); boolean busy;
     public volatile String pairEp;
+    volatile String lastEp;   // last connect endpoint we tried to connect to
     public static volatile AdbFind INSTANCE;
 
     public void onLoad(Application a, File modDir, ClassLoader loader) {
@@ -51,6 +53,7 @@ public class AdbFind implements Mod {
         }, new IntentFilter(ACTION));
         publishShortcut();
         hookSettings();
+        publishConnected();
         if (nsd == null) return;
         start("_adb-tls-connect._tcp", "adb-connect-port");
         start("_adb-tls-pairing._tcp", "adb-pair-port");
@@ -59,9 +62,10 @@ public class AdbFind implements Mod {
     void start(final String type, final String file) {
         try {
             nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, new NsdManager.DiscoveryListener() {
-                public void onServiceFound(NsdServiceInfo s) { queue.add(new Object[]{s, file}); pump(); }
+                public void onServiceFound(NsdServiceInfo s) { queue.add(new Object[]{s, file, 0}); pump(); }
                 public void onServiceLost(NsdServiceInfo s) {
                     new File(tmp, file).delete();
+                    if (file.equals("adb-connect-port")) writeState("disconnected: служба Беспроводной отладки пропала (отладка выключена или сменилась сеть)");
                     if (file.equals("adb-pair-port")) { pairEp = null; if (nm != null) nm.cancel(N_PAIR); }
                 }
                 public void onDiscoveryStarted(String t) { Log.i(TAG, "discovering " + t); }
@@ -76,13 +80,19 @@ public class AdbFind implements Mod {
         h.post(new Runnable() { public void run() {
             if (busy) return; final Object[] it = queue.poll(); if (it == null) return; busy = true;
             nsd.resolveService((NsdServiceInfo) it[0], new NsdManager.ResolveListener() {
-                public void onResolveFailed(NsdServiceInfo s, int c) { busy = false; if (c == 3) queue.add(it); h.postDelayed(new Runnable(){ public void run(){ pump(); }}, 500); }
+                public void onResolveFailed(NsdServiceInfo s, int c) {
+                    busy = false; int n = (Integer) it[2];
+                    Log.w(TAG, "resolve failed " + it[1] + " code=" + c + " attempt=" + n);
+                    // 0 = internal error, 3 = already active, 4 = max limit: transient, retry a few times
+                    if ((c == 0 || c == 3 || c == 4) && n < 5) { it[2] = n + 1; queue.add(it); }
+                    h.postDelayed(new Runnable(){ public void run(){ pump(); }}, 500 * (n + 1)); }
                 public void onServiceResolved(NsdServiceInfo s) {
                     busy = false; String host = s.getHost() != null ? s.getHost().getHostAddress() : "127.0.0.1";
                     String ep = host + ":" + s.getPort();
                     try (FileWriter w = new FileWriter(new File(tmp, (String) it[1]))) { w.write(ep + "\n"); } catch (Throwable ignored) {}
                     Log.i(TAG, it[1] + " = " + ep);
                     if (it[1].equals("adb-pair-port")) { pairEp = ep; notifyPair(); }
+                    if (it[1].equals("adb-connect-port")) autoConnect(ep);
                     pump();
                 }
             });
@@ -191,6 +201,60 @@ public class AdbFind implements Mod {
                 .setContentText(text).setAutoCancel(true).build());
     }
 
+    // ---- state file $PREFIX/tmp/adb-state: "connected EP" / "disconnected: reason", plus a timestamp ----
+    void writeState(String text) {
+        try (FileWriter w = new FileWriter(new File(tmp, "adb-state"))) { w.write(text + "\n" + System.currentTimeMillis() / 1000 + "\n"); } catch (Throwable ignored) {}
+    }
+
+    /** Like run() but kills the process after the timeout; returns null on timeout. */
+    String runT(long seconds, String... cmd) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+            pb.environment().put("HOME", home.getAbsolutePath()); pb.environment().put("PREFIX", prefix.getAbsolutePath());
+            pb.environment().put("TMPDIR", tmp.getAbsolutePath()); pb.environment().put("PATH", prefix + "/bin");
+            final Process p = pb.start(); final StringBuilder sb = new StringBuilder();
+            Thread rd = new Thread(new Runnable() { public void run() { try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) { String l; while ((l = r.readLine()) != null) sb.append(l).append('\n'); } catch (Throwable ignored) {} } });
+            rd.start();
+            if (!p.waitFor(seconds, TimeUnit.SECONDS)) { p.destroy(); rd.join(500); return null; }
+            rd.join(1000); return sb.toString().trim();
+        } catch (Throwable t) { Log.e(TAG, "runT " + cmd[0], t); return null; }
+    }
+
+    /** A connection can show up as "device" for a moment and then drop (handshake): require a real round trip. */
+    boolean alive(String ep) { String o = runT(5, prefix + "/bin/adb", "-s", ep, "shell", "echo", "ok"); return o != null && o.equals("ok"); }
+
+    /** New connect endpoint found: connect to it in the background (retry a few times) and publish the result. */
+    void autoConnect(final String ep) {
+        if (!new File(prefix + "/bin/adb").exists()) return;
+        if (ep.equals(lastEp)) return;
+        lastEp = ep;
+        new Thread(new Runnable() { public void run() {
+            String adb = prefix + "/bin/adb";
+            for (int i = 0; i < 4 && ep.equals(lastEp); i++) {
+                runT(8, adb, "connect", ep);
+                if (alive(ep)) { writeState("connected " + ep); Log.i(TAG, "auto-connected " + ep); return; }
+                try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+            }
+            if (ep.equals(lastEp)) { writeState("disconnected: не удалось подключиться к " + ep + " (нужно сопряжение: dsu pair КОД?)"); Log.w(TAG, "auto-connect failed " + ep); }
+        } }).start();
+    }
+
+    /** At start: if a device is already connected but no connect endpoint was published, publish it (the device may have been connected by hand). */
+    void publishConnected() {
+        new Thread(new Runnable() { public void run() {
+            if (!new File(prefix + "/bin/adb").exists()) return;
+            String out = runT(10, prefix + "/bin/adb", "devices");
+            if (out == null) return;
+            String ep = null; int n = 0;
+            for (String l : out.split("\n")) { String[] p = l.trim().split("\\s+"); if (p.length >= 2 && p[1].equals("device")) { ep = p[0]; n++; } }
+            if (n == 1 && ep.indexOf(':') > 0) {
+                lastEp = ep; writeState("connected " + ep);
+                File f = new File(tmp, "adb-connect-port");
+                if (!f.exists()) try (FileWriter w = new FileWriter(f)) { w.write(ep + "\n"); } catch (Throwable ignored) {}
+            }
+        } }).start();
+    }
+
     public String run(String... cmd) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         pb.environment().put("HOME", home.getAbsolutePath()); pb.environment().put("PREFIX", prefix.getAbsolutePath());
@@ -218,7 +282,8 @@ public class AdbFind implements Mod {
 
     public String doConnect() {
         try { String c = connectEp(); if (c == null) return "Нет точки подключения (включите «Беспроводная отладка»)";
-            String out = run(prefix + "/bin/adb", "connect", c); Log.i(TAG, "connect: " + out); return out; }
+            String out = run(prefix + "/bin/adb", "connect", c); Log.i(TAG, "connect: " + out);
+            lastEp = c; writeState(alive(c) ? "connected " + c : "disconnected: " + out); return out; }
         catch (Throwable t) { return "Ошибка: " + t; }
     }
 

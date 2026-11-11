@@ -33,11 +33,27 @@ public class AdbScreen implements ModScreen {
         act2.addView(ui.label("Действия", 16, ui.text, true));
         act2.addView(ui.button("Подключить", false, new Runnable() { public void run() { bg(new Callable<String>() { public String call() { return AdbFind.INSTANCE.doConnect(); } }); } }), ui.gap(10));
         act2.addView(ui.button("Проверить (shell id)", false, new Runnable() { public void run() { bg(new Callable<String>() { public String call() { return AdbFind.INSTANCE.doTest(); } }); } }), ui.gap(8));
+        act2.addView(ui.button("Открыть привилегированный терминал", true, new Runnable() { public void run() { openTerminal(); } }), ui.gap(8));
         act2.addView(ui.button("Открыть «Для разработчиков»", false, new Runnable() { public void run() {
             try { act.startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)); } catch (Throwable e) { show("Не удалось: " + e); } } }), ui.gap(8));
         act2.addView(ui.button("Добавить ярлык на главный экран", false, new Runnable() { public void run() { show(AdbFind.INSTANCE.pinShortcut()); } }), ui.gap(8));
         out = ui.mono(act2);
         refresh();
+    }
+
+    /** New Termux tab running the interactive `dsu` (RunCommandService is a component of this very app, so no extra permission is needed). */
+    void openTerminal() {
+        try {
+            AdbFind f = AdbFind.INSTANCE;
+            Intent i = new Intent("com.termux.RUN_COMMAND").setClassName(act.getPackageName(), "com.termux.app.RunCommandService")
+                .putExtra("com.termux.RUN_COMMAND_PATH", f.prefix + "/bin/dsu")
+                .putExtra("com.termux.RUN_COMMAND_WORKDIR", f.home.getAbsolutePath())
+                .putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
+                .putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
+            if (!new java.io.File(f.prefix + "/bin/dsu").exists()) { show("Команда dsu не найдена в $PREFIX/bin (нужна новая сборка или ручная копия god/runtime/dsu)"); return; }
+            act.startService(i);
+            show("Открываю вкладку с dsu…");
+        } catch (Throwable t) { show("Не удалось открыть терминал: " + t); }
     }
 
     void show(final String s) { act.runOnUiThread(new Runnable() { public void run() { out.setText(s); out.setVisibility(View.VISIBLE); } }); }
@@ -60,6 +76,7 @@ public class AdbScreen implements ModScreen {
                 ui.row(statusCard, "Точка подключения", ep == null ? "не найдена — включите «Беспроводная отладка»" : ep, ep == null ? ui.err : ui.ok);
                 ui.row(statusCard, "Окно сопряжения", pairing ? "открыто (" + f.pairEp + ")" : "закрыто", pairing ? ui.ok : ui.sub);
                 ui.row(statusCard, "ADB", fst, fsc);
+                ui.row(statusCard, "Команда в терминале", "dsu  (dsu --tab - в новой вкладке)", ui.sub);
             } });
         } }).start();
     }
