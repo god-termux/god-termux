@@ -13,7 +13,7 @@ wrappers() {
 D=@D@
 export FHS_DEBIAN=1 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 R=""; [ -x @P@/glibc/shim/fhs-run ] && R=@P@/glibc/shim/fhs-run
-PATH="$D/.ddpkg-bin:$PATH" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends --log=$D/var/log/dpkg.log "$@"
+PATH="$D/.ddpkg-bin:$PATH:$D/usr/sbin:$D/sbin" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends --log=$D/var/log/dpkg.log "$@"
 rc=$?; "$D/.ddpkg-bin/fixlinks"; exit $rc
 E2
   gen > "$D/.ddpkg-bin/fixlinks" <<'E2'

@@ -240,3 +240,14 @@ int unlink(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD
 int rmdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "rmdir"); P(p); fhs_cache_clear(); return r(p); }
 void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "dlopen"); if (!p) return r(p, fl); P(p); return r(p, fl); }
 #endif
+
+#ifndef GLIBC_BUILD
+// Debian mode (dpkg maintainer scripts run by Termux's bionic sh): the fhs-run supervisor translates the paths of open/stat/... but cannot change
+// another process's working directory, so chdir is mapped here. Only with FHS_DEBIAN set; ordinary Termux processes are left alone.
+int chdir(const char* p) {
+  static int (*r)(const char*);
+  if (!r) r = dlsym(RTLD_NEXT, "chdir");
+  if (p && p[0] == '/' && getenv("FHS_DEBIAN")) { char b[PATH_MAX]; const char* m = fmap(p, b); return r(m); }
+  return r(p);
+}
+#endif
