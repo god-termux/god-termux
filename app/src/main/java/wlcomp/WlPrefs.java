@@ -20,6 +20,7 @@ final class WlPrefs {
     boolean keybar = true, menuBtn = true; float menuX = -1, menuY = -1;
     // render: 0 platform GLES driver, 1 ANGLE (read by the native render loop from flag files in ~/.termux when the compositor starts)
     int render; boolean bench;
+    boolean pipeline = true;   // send frame callbacks right after a commit is copied (client draws N+1 while N is presented); flag ~/.termux/wl-pipeline
     int mouseMode;      // pointer source: 0 touch and physical mouse (auto), 1 touch only, 2 physical mouse only
     int kbMode;         // keyboard input: 0 both (auto, duplicates dropped), 1 on-screen only, 2 hardware only
     private final Context ctx;
@@ -33,6 +34,7 @@ final class WlPrefs {
         touchMode = sp.getInt("touchMode", sp.getBoolean("padmode", false) ? 1 : 0);
         sens = sp.getFloat("sens", 1f); scrollSpeed = sp.getFloat("scroll", 1f); curSize = sp.getFloat("cur", 1f); accel = sp.getBoolean("accel", true); invScroll = sp.getBoolean("inv", false);
         tapClick = sp.getBoolean("tap", true); tapDrag = sp.getBoolean("tapdrag", true); padButtons = sp.getBoolean("btns", true); longMode = sp.getInt("long", 0);
+        pipeline = sp.getBoolean("pipeline", true); flag("wl-pipeline", pipeline);
         keybar = sp.getBoolean("keybar", true); menuBtn = sp.getBoolean("menuBtn", true); menuX = sp.getFloat("menuX", -1); menuY = sp.getFloat("menuY", -1);
     }
     void save() {
@@ -40,8 +42,8 @@ final class WlPrefs {
             .putBoolean("full", fullscreen).putBoolean("keepOn", keepOn).putBoolean("cutout", cutout).putInt("touchMode", touchMode)
             .putFloat("sens", sens).putFloat("scroll", scrollSpeed).putFloat("cur", curSize).putBoolean("accel", accel).putBoolean("inv", invScroll).putBoolean("tap", tapClick)
             .putBoolean("tapdrag", tapDrag).putBoolean("btns", padButtons).putInt("long", longMode).putBoolean("keybar", keybar).putBoolean("menuBtn", menuBtn)
-            .putFloat("menuX", menuX).putFloat("menuY", menuY).putInt("render", render).putBoolean("bench", bench).putInt("kbMode", kbMode).putInt("mouseMode", mouseMode).apply();
-        flag("wl-angle", render == 1); flag("wl-bench", bench);
+            .putFloat("menuX", menuX).putFloat("menuY", menuY).putInt("render", render).putBoolean("bench", bench).putBoolean("pipeline", pipeline).putInt("kbMode", kbMode).putInt("mouseMode", mouseMode).apply();
+        flag("wl-angle", render == 1); flag("wl-bench", bench); flag("wl-pipeline", pipeline);
     }
     /** The native loop looks for these files when it starts (home/.termux inside the app's files dir = Termux $HOME/.termux). */
     private void flag(String name, boolean on) {

@@ -66,6 +66,7 @@ final class WlSettingsUi {
         section("Рендер");
         choice("Графический драйвер", new String[] {"Системный (драйвер Mali)", "ANGLE (OpenGL ES поверх Vulkan)"}, p.render, new IntSet() { public void set(int v) { p.render = v; changed(false); } },
             "Применяется при следующем запуске Wayland: ☰ → ✕ Закрыть Wayland, затем открыть снова. Если ANGLE не загрузится, будет системный");
+        toggle("Конвейер кадров", "Отправлять клиенту сигнал следующего кадра сразу после приёма, а не после вывода на экран. Даёт ~60 кадров/с вместо ~45-50. Применяется после «Закрыть Wayland» и повторного запуска", p.pipeline, new BoolSet() { public void set(boolean v) { p.pipeline = v; changed(false); } });
         toggle("Замер производительности", "Непрерывная перерисовка без ограничения кадров; статистика в logcat (тег wlcomp) и tmp/wlcomp-render.log. Нагружает батарею", p.bench, new BoolSet() { public void set(boolean v) { p.bench = v; changed(false); } });
 
         section("Указатель");

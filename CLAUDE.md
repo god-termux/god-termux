@@ -76,3 +76,11 @@ bash god/build-local.sh      # APK: ~/god-build/app/build/outputs/apk/debug/*.ap
 - Запуск glibc-программ с нестандартным загрузчиком: шим удаляет `LD_LIBRARY_PATH` (отключается `FHS_KEEP_LDLP=1`), `timeout` нужно ставить перед `env`, а не после (иначе glibc-каталог попадёт в bionic-процесс).
 - Не проверено: вывод окна драйвером PanVK в наш композитор (Wayland WSI), корректность картинки (в `vkbench` нет проверки пикселей), стабильность и нагрев, Chromium через ANGLE→Vulkan→PanVK.
 
+
+## Chromium на нашем Wayland и 60 кадров (2026-11-11)
+- Debian Chromium идёт прямо на `wayland-0` (`wlchromium`). `WLCHROMIUM_GPU=panvk wlchromium URL` — рендер через ANGLE → Vulkan → PanVK (glibc-сборка zenithblue из `~/gpu-drivers`, нужны настоящие `libSPIRV-Tools.so` и `libwayland-client` 1.26 из `$PREFIX/glibc/god-lib`, их собирает `god/tools/gpu/build-glibc-libs.sh`, шим ставит этот каталог первым в `--library-path`).
+- Собственный Vulkan-вывод Chromium на ozone-wayland не работает («not compatible with Vulkan», «Failed to create vulkan surface»): PanVK используется только слоем ANGLE (GL поверх Vulkan).
+- **Потеря кадров была не в копии, а во времени отправки `frame callback`:** композитор слал его после блокирующего `eglSwapBuffers` (vsync), и клиент с композитором работали по очереди. Флаг `~/.termux/wl-pipeline` (настройка «Конвейер кадров», по умолчанию вкл.) шлёт callback сразу после приёма кадра. Лёгкая страница (`bench.html?light=1`, окно 2392x903): PanVK 45,7 → 59,5 кадров/с (медиана 16,6 мс), программный 47 → 52,8. Передача буфера без копии (`dmabuf` → `AHardwareBuffer`) для этого не понадобилась.
+- Тяжёлая страница (градиент на всё окно + 300 полупрозрачных прямоугольников): PanVK 26 кадров/с, с `--enable-gpu-rasterization --enable-accelerated-2d-canvas --canvas-oop-rasterization` 30,6 (в `wlchromium` включены). Это уже предел заполнения/растеризации, а не передачи кадра.
+- Замеры только при открытом экране Wayland: в фоне страница не отчитывается. Режим «Замер» композитора должен быть выключен.
+- Не проверено: программный режим на тяжёлой странице с `wl-pipeline` (страница не отчиталась), реальные сайты и видео, влияние на батарею.
