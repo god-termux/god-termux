@@ -48,6 +48,13 @@ static const char* mapat(int mem, uint64_t addr, char* orig, char* mp) {
   if (rdstr(mem, addr, orig, PATH_MAX) || orig[0] != '/') return NULL;
   const char* m = fmap(orig, mp); return m == orig ? NULL : m;
 }
+// relative path of the traced process (dirfd or its cwd) -> absolute path, so that a rename/link with one translated and one relative name can be done here
+static const char* absat(int pid, int dirfd, const char* rel, char* out) {
+  char lp[64], base[PATH_MAX];
+  if (dirfd == AT_FDCWD) snprintf(lp, sizeof lp, "/proc/%d/cwd", pid); else snprintf(lp, sizeof lp, "/proc/%d/fd/%d", pid, dirfd);
+  ssize_t n = readlink(lp, base, sizeof base - 1); if (n <= 0) return NULL; base[n] = 0;
+  snprintf(out, PATH_MAX, "%s/%s", base, rel); return out;
+}
 static int handle_write_i(int fd, struct seccomp_notif* rq, int mem);
 static int handle_write(int fd, struct seccomp_notif* rq, int mem) { fhs_create = 1; int r = handle_write_i(fd, rq, mem); fhs_create = 0; return r; }
 static int handle_write_i(int fd, struct seccomp_notif* rq, int mem) {
@@ -67,8 +74,8 @@ static int handle_write_i(int fd, struct seccomp_notif* rq, int mem) {
   } else if (nr == __NR_linkat || nr == __NR_renameat || nr == __NR_renameat2) {
     const char* p1 = mapat(mem, a[1], o1, m1); const char* p2 = mapat(mem, a[3], o2, m2);
     if (!p1 && !p2) return 0;
-    if (!p1) { if (rdstr(mem, a[1], o1, sizeof o1)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p1 = o1; if (o1[0] != '/') return 0; }
-    if (!p2) { if (rdstr(mem, a[3], o2, sizeof o2)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p2 = o2; if (o2[0] != '/') return 0; }
+    if (!p1) { if (rdstr(mem, a[1], o1, sizeof o1)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p1 = o1; if (o1[0] != '/') { if (!absat(rq->pid, (int)a[0], o1, m1)) return 0; p1 = m1; } }
+    if (!p2) { if (rdstr(mem, a[3], o2, sizeof o2)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p2 = o2; if (o2[0] != '/') { if (!absat(rq->pid, (int)a[2], o2, m2)) return 0; p2 = m2; } }
     if (nr == __NR_linkat) res = syscall(__NR_linkat, AT_FDCWD, p1, AT_FDCWD, p2, (int)a[4]);
     else if (nr == __NR_renameat2) res = syscall(__NR_renameat2, AT_FDCWD, p1, AT_FDCWD, p2, (unsigned)a[4]);
     else res = syscall(__NR_renameat2, AT_FDCWD, p1, AT_FDCWD, p2, 0u);
