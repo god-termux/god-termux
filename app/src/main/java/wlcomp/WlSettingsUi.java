@@ -53,6 +53,10 @@ final class WlSettingsUi {
             number("Высота, px", p.resH, 240, 4320, new IntSet() { public void set(int v) { p.resH = v; changed(true); } });
             choice("Вписывание картинки", new String[] {"Сохранять пропорции (чёрные поля)", "Растянуть на весь экран"}, p.fit, new IntSet() { public void set(int v) { p.fit = v; changed(false); } }, null);
         }
+        { final int[] hz = WlPrefs.rates(act); String[] names = new String[hz.length + 1]; names[0] = "Авто (как в системе)"; int sel = 0;
+          for (int i = 0; i < hz.length; i++) { names[i + 1] = hz[i] + " Гц"; if (hz[i] == p.fps) sel = i + 1; }
+          choice("Частота кадров экрана", names, sel, new IntSet() { public void set(int v) { p.fps = v == 0 ? 0 : hz[v - 1]; changed(false); } },
+              "Какую частоту обновления просить у экрана. Если в системных настройках частота зафиксирована, система может её не уступить"); }
         choice("Масштаб интерфейса", new String[] {"Авто", "1×", "2×", "3×"}, p.uiScale, new IntSet() { public void set(int v) { p.uiScale = v; changed(false); } }, "Размер элементов программ (целое число раз)");
         choice("Ориентация", new String[] {"Авто", "Альбомная", "Портретная"}, p.orient, new IntSet() { public void set(int v) { p.orient = v; changed(false); } }, null);
         toggle("Полный экран", "Скрыть строку состояния и кнопки навигации", p.fullscreen, new BoolSet() { public void set(boolean v) { p.fullscreen = v; changed(false); } });

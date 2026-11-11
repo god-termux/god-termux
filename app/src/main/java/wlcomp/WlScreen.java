@@ -103,7 +103,15 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         act.setRequestedOrientation(p.orient == 1 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE : p.orient == 2 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         WindowManager.LayoutParams lp = act.getWindow().getAttributes();
         if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = p.cutout ? (Build.VERSION.SDK_INT >= 30 ? 3 /* ALWAYS: also the long edges in landscape */ : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES) : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+        lp.preferredDisplayModeId = 0; lp.preferredRefreshRate = 0;
+        if (p.fps > 0) try {
+            android.view.Display d = act.getWindowManager().getDefaultDisplay(); android.view.Display.Mode cur = d.getMode();
+            for (android.view.Display.Mode m : d.getSupportedModes())
+                if (m.getPhysicalWidth() == cur.getPhysicalWidth() && m.getPhysicalHeight() == cur.getPhysicalHeight() && Math.round(m.getRefreshRate()) == p.fps) { lp.preferredDisplayModeId = m.getModeId(); break; }
+            lp.preferredRefreshRate = p.fps;
+        } catch (Throwable ignored) {}
         act.getWindow().setAttributes(lp);
+        try { nativeRefresh(p.fps > 0 ? p.fps * 1000 : Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f)); } catch (Throwable ignored) {}
         if (p.keepOn) act.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); else act.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applySystemBars();
         if (p.kbMode == 2 && kbShown) toggleKeyboard();   // hardware-only: hide the on-screen keyboard
@@ -317,7 +325,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         @Override public void surfaceCreated(SurfaceHolder h) {}
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) {
             nativeSurface(h.getSurface(), new File(act.getFilesDir(), "usr/tmp").getAbsolutePath(), w, hh, curScale); lastSentScale = curScale;
-            try { nativeRefresh(Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f)); } catch (Throwable ignored) {}
+            try { nativeRefresh(p.fps > 0 ? p.fps * 1000 : Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f)); } catch (Throwable ignored) {}
         }
         @Override public void surfaceDestroyed(SurfaceHolder h) { nativeSurface(null, "", 0, 0, 0); }
 
