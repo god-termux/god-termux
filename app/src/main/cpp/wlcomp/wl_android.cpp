@@ -197,7 +197,8 @@ long now_ms() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec 
 
 void renderLoop() {
   std::string home = rtDir + "/../../home";
-  bool bench = access((home + "/.termux/wl-bench").c_str(), F_OK) == 0, angle = access((home + "/.termux/wl-angle").c_str(), F_OK) == 0;
+  bool bench = access((home + "/.termux/wl-bench").c_str(), F_OK) == 0, angle = access((home + "/.termux/wl-angle").c_str(), F_OK) == 0,
+       pipeline = access((home + "/.termux/wl-pipeline").c_str(), F_OK) == 0;   // wl-pipeline: send frame callbacks right after the commit was copied, not after the vsync-blocked swap (client draws frame N+1 while we present N)
   if (angle && !loadGraphics(true)) { LOG("ANGLE недоступен, использую системный драйвер"); angle = false; }
   if (!angle && !loadGraphics(false)) { LOG("не удалось загрузить EGL/GLES"); running = false; return; }
   std::string logPath = rtDir + "/wlcomp-render.log"; bool reported = false; long statT = 0, statSum = 0, statMax = 0; int statN = 0;
@@ -212,6 +213,7 @@ void renderLoop() {
   int W = startW, H = startH; long lastDone = 0; bool force = true;
   while (running) {
     wlc_dispatch(4);
+    if (pipeline) wlc_frame_done();
     { std::lock_guard<std::mutex> g(wm);
       if (winChanged) {
         winChanged = false;

@@ -4,16 +4,20 @@
 <script>
 // Animates a full-window canvas (gradient + 300 moving rects + text) for DURATION seconds and counts requestAnimationFrame callbacks.
 // Result (fps, frame-time percentiles) is POSTed to the collector (/result).
-const DURATION = 10, c = document.getElementById('c'), x = c.getContext('2d');
+const DURATION = +(new URLSearchParams(location.search).get('d') || 10), c = document.getElementById('c'), x = c.getContext('2d');
 function fit() { c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio; }
 fit(); addEventListener('resize', fit);
 let t0 = performance.now(), last = t0, n = 0; const dts = [];
+const LIGHT = new URLSearchParams(location.search).get('light');   // ?light=1: one small moving square (measures the present path, not canvas raster)
 function frame(now) {
   const W = c.width, H = c.height, t = (now - t0) / 1000;
+  if (LIGHT) { x.fillStyle = '#123'; x.fillRect(0, 0, W, H); x.fillStyle = '#fa0'; x.fillRect((Math.sin(t * 3) * 0.5 + 0.5) * (W - 200), H / 2 - 100, 200, 200); }
+  else {
   const g = x.createLinearGradient(0, 0, W, H); g.addColorStop(0, `hsl(${(t * 40) % 360},70%,40%)`); g.addColorStop(1, `hsl(${(t * 40 + 120) % 360},70%,20%)`);
   x.fillStyle = g; x.fillRect(0, 0, W, H);
   for (let i = 0; i < 300; i++) { x.fillStyle = `hsla(${(i * 7 + t * 90) % 360},80%,60%,0.6)`; x.fillRect((Math.sin(t + i) * 0.5 + 0.5) * (W - 60), (Math.cos(t * 0.7 + i * 0.3) * 0.5 + 0.5) * (H - 60), 60, 60); }
   x.fillStyle = '#fff'; x.font = (28 * devicePixelRatio) + 'px sans-serif'; for (let i = 0; i < 8; i++) x.fillText('webbench ' + n + ' frame', 20, 60 + i * 40 * devicePixelRatio);
+  }
   dts.push(now - last); last = now; n++;
   document.getElementById('r').textContent = 'кадров: ' + n + ', ' + (n / ((now - t0) / 1000)).toFixed(1) + ' кадров/с';
   if (now - t0 < DURATION * 1000) requestAnimationFrame(frame); else done(now);

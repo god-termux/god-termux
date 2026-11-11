@@ -66,6 +66,8 @@ PATH=$PREFIX/glibc/bin:$PATH aarch64-linux-gnu-gcc -shared -fPIC -O2 -DGLIBC_BUI
 clang -O2 -o $A/glibc/shim/fhs-run $F/fhs-run.c
 clang -shared -fPIC -O2 -o $A/glibc/shim/libdapt-nolink.so god/runtime/nolink.c   # dapt: hard link -> copy fallback
 (cd $A/glibc/shim && sha256sum libfhs-bionic.so libfhs-glibc.so fhs-run libdapt-nolink.so > SHA256SUMS)
+# glibc libraries the PanVK glibc driver needs and Debian 13 lacks (real libSPIRV-Tools.so, libwayland-client >= 1.24): built once by god/tools/gpu/build-glibc-libs.sh into ~/god-libs
+if ls ${GOD_LIBS:-$HOME/god-libs}/lib* >/dev/null 2>&1; then mkdir -p $A/glibc/god-lib; cp -a ${GOD_LIBS:-$HOME/god-libs}/lib* $A/glibc/god-lib/; fi
 cp god/runtime/dapt god/runtime/gsh god/runtime/dsu god/runtime/dsu-tx-server.py god/runtime/wlrun god/runtime/wlbench god/runtime/xfce-wl $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
 
 # 5. Gradle (aapt2 from Termux; the SDK's x86 aapt2 cannot run here)

@@ -32,6 +32,9 @@ static char** envcopy(char* const* envp, const char* shim, int drop_ldlp, int ke
     if (drop_ldlp && !strncmp(envp[i], "LD_LIBRARY_PATH=", 16)) continue;
     r[k++] = envp[i];
   }
+  if (!shim || !shim[0]) {
+    r[k] = 0; return r;
+  }
   char* v = malloc(PATH_MAX * 4); strcpy(v, "LD_PRELOAD="); strcat(v, shim);
   if (keep_others && oldpre) { char* t = strdup(oldpre); for (char* s = strtok(t, ": "); s; s = strtok(0, ": "))
       if (!strstr(s, "libfhs-")) { strcat(v, ":"); strcat(v, s); } free(t); }
@@ -128,12 +131,12 @@ static int prepare(const char* path, char* const argv[], char* const envp[], con
       if (kind == K_STD || kind == K_CUSTOM) {
         if (kind == K_STD) {
           char** nv = malloc(sizeof(char*) * (ac + 6)); int k = 0;
-          nv[k++] = (char*)LDSO; nv[k++] = "--library-path"; nv[k++] = GLIB "/lib:" DEB "/usr/lib/aarch64-linux-gnu:" DEB "/lib/aarch64-linux-gnu:" DEB "/usr/lib:" DEB "/lib";
+          nv[k++] = (char*)LDSO; nv[k++] = "--library-path"; nv[k++] = GLIB "/god-lib:" GLIB "/lib:" DEB "/usr/lib/aarch64-linux-gnu:" DEB "/lib/aarch64-linux-gnu:" DEB "/usr/lib:" DEB "/lib";
           nv[k++] = "--argv0"; nv[k++] = ac ? av[0] : (char*)real; nv[k++] = (char*)real;
           for (int i = 1; i < ac; i++) nv[k++] = av[i]; nv[k] = 0;
           *op = LDSO; *oa = nv;
         } else { *op = real; *oa = av; }
-        *oe = envexe(envcopy(envp, SHIM_G, 1, 0), kind == K_STD ? real : 0); return 0;
+        *oe = envexe(envcopy(envp, SHIM_G, envhas(envp, "FHS_KEEP_LDLP=") ? 0 : 1, 0), kind == K_STD ? real : 0); return 0;   // FHS_KEEP_LDLP=1: the program needs its own LD_LIBRARY_PATH (e.g. chromen)
       }
       if (kind == K_STATIC && !envhas(envp, "FHS_SUP=") && !envhas(envp, "FHS_STATIC=0") && rexists(GLIB "/shim/fhs-run")) {
         char** nv = malloc(sizeof(char*) * (ac + 3)); int k = 0;
@@ -141,6 +144,10 @@ static int prepare(const char* path, char* const argv[], char* const envp[], con
         *op = GLIB "/shim/fhs-run"; *oa = nv; *oe = (char**)envp; return 0;
       }
       // bionic (or unsupervised static) target: make sure no glibc shim is inherited
+      // Also do NOT inject libfhs into Android /system or /apex binaries
+      if (!strncmp(real, "/system/", 8) || !strncmp(real, "/apex/", 6) || !strncmp(real, "/vendor/", 8)) {
+        *op = real; *oa = av; *oe = envcopy(envp, "", 0, 0); return 0;
+      }
       *op = real; *oa = av; *oe = envcopy(envp, SHIM_B, 0, 1); return 0;
     }
   }
