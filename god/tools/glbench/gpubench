@@ -1,0 +1,15 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# gpubench - the same offscreen test (heavy fragment shader 1280x720 + draw-call overhead) through every GPU path found on this phone.
+# Needs glbench/vkbench installed (god/tools/glbench/build.sh). Third-party Vulkan drivers are looked for in ~/gpu-drivers:
+#   zenith/libvulkan_panfrost-android-aarch64.so + icd-android.json     (https://github.com/zenithblue-oss/panvk-kbase-android)
+#   apexspan/libvulkan_panfrost.so + icd.json                           (https://github.com/apexspan-svg/mesa-panvk-mali-g57)
+# Each driver is used through its own ICD file via VK_ICD_FILENAMES; nothing is installed into $PREFIX.
+G=$HOME/gpu-drivers; L=$PREFIX/lib/libvulkan.so.1
+line() { grep -E 'GL_RENDERER|VkDevice|тяжёлый|вызовы|ОШИБКА' | sed -e 's/^ *//' | cut -c1-150; }
+echo "### Vulkan, родной драйвер Mali (Android)";            timeout 90 vkbench 2>&1 | line
+for d in zenith/icd-android.json apexspan/icd.json; do [ -f $G/$d ] || continue
+  echo "### Vulkan, PanVK ($d)"; VK_ICD_FILENAMES=$G/$d PANVK_NO_AFBC=1 timeout 90 vkbench $L 2>&1 | line; done
+echo "### OpenGL ES, родной драйвер Mali";                   timeout 90 glbench default 2>&1 | line
+echo "### OpenGL ES, ANGLE -> Vulkan (родной)";              timeout 90 glbench angle vulkan 2>&1 | line
+for d in zenith/icd-android.json apexspan/icd.json; do [ -f $G/$d ] || continue
+  echo "### OpenGL ES, Zink -> PanVK ($d)"; EGL_PLATFORM=surfaceless MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_ICD_FILENAMES=$G/$d timeout 90 glbench $PREFIX/lib/libEGL.so $PREFIX/lib/libGLESv2.so 2>&1 | line; done
