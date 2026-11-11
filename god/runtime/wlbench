@@ -1,0 +1,20 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# wlbench platform|angle [SECONDS] [CLIENT CMD...]  - render test of the Wayland compositor with the platform GLES driver or ANGLE.
+# Sets ~/.termux/wl-bench (continuous redraw, vsync off, every window re-uploaded each pass) and ~/.termux/wl-angle (ANGLE) flags, opens the compositor
+# window, collects the lines the render loop writes to $PREFIX/tmp/wlcomp-render.log, prints them and an average. The window must be closed
+# (back button) between runs, because the backend is chosen when the render loop starts. Flags stay set: remove with  wlbench off
+P=${PREFIX:-/data/data/com.termux/files/usr}; F=$HOME/.termux; LOG=$P/tmp/wlcomp-render.log
+case "$1" in
+  off) rm -f "$F/wl-bench" "$F/wl-angle"; echo "wlbench: флаги сняты"; exit 0 ;;
+  platform) rm -f "$F/wl-angle" ;;
+  angle) touch "$F/wl-angle" ;;
+  *) echo "usage: wlbench platform|angle [секунд] [программа Wayland…]   |   wlbench off"; exit 2 ;;
+esac
+SEC=${2:-10}; shift; [ $# -gt 0 ] && shift
+touch "$F/wl-bench"; : > "$LOG"
+if [ -n "$1" ]; then (wlrun "$@" >/dev/null 2>&1 &); fi
+am start -n com.termux/com.termux.mod.WlActivity >/dev/null 2>&1
+echo "wlbench: окно Wayland открыто, собираю данные $SEC с (потом нажмите «назад»)…"
+sleep "$SEC"
+echo "--- $LOG:"; cat "$LOG"
+awk '/кадров\/с/ { for (i=1;i<=NF;i++) if ($i ~ /^\(/) { v=substr($i,2)+0; s+=v; n++ } } END { if (n) printf "среднее по %d замерам: %.1f кадров/с\n", n, s/n }' "$LOG"

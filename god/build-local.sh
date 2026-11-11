@@ -56,6 +56,8 @@ W=app/src/main/cpp/wlcomp
 clang -x c -O2 -fPIC -c -I$W -I$PREFIX/include $W/xdg-shell-protocol.c -o $TMPDIR/xdg-shell.o
 clang++ -std=c++17 -O2 -fPIC -shared -I$W -I$PREFIX/include $W/wl_android.cpp $W/wlc.cpp $TMPDIR/xdg-shell.o -o $J/libwlcomp.so -L$PREFIX/lib -lwayland-server /system/lib64/libEGL.so /system/lib64/libGLESv2.so /system/lib64/libandroid.so /system/lib64/liblog.so
 cp "$PREFIX/lib/libwayland-server.so" "$PREFIX/lib/libffi.so" "$PREFIX/lib/libandroid-support.so" $J/
+# optional ANGLE test for wlcomp: the device's own ANGLE libs are not public, so an app cannot load them from /system; ship copies in the app lib dir (not in the repo)
+for f in libEGL_angle.so libGLESv2_angle.so; do [ -f /system/lib64/$f ] && cp /system/lib64/$f $J/ || true; done
 
 # 4. runtime assets: shim (bionic + glibc variants), supervisor, scripts, checksums
 A=app/src/main/assets/god; mkdir -p $A/glibc/shim $A/bin $A/etc/profile.d; F=god/fhs
@@ -64,7 +66,7 @@ PATH=$PREFIX/glibc/bin:$PATH aarch64-linux-gnu-gcc -shared -fPIC -O2 -DGLIBC_BUI
 clang -O2 -o $A/glibc/shim/fhs-run $F/fhs-run.c
 clang -shared -fPIC -O2 -o $A/glibc/shim/libdapt-nolink.so god/runtime/nolink.c   # dapt: hard link -> copy fallback
 (cd $A/glibc/shim && sha256sum libfhs-bionic.so libfhs-glibc.so fhs-run libdapt-nolink.so > SHA256SUMS)
-cp god/runtime/dapt god/runtime/gsh god/runtime/dsu god/runtime/dsu-tx-server.py god/runtime/wlrun god/runtime/xfce-wl $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
+cp god/runtime/dapt god/runtime/gsh god/runtime/dsu god/runtime/dsu-tx-server.py god/runtime/wlrun god/runtime/wlbench god/runtime/xfce-wl $A/bin/; cp god/runtime/glibc-fhs.sh $A/etc/profile.d/
 
 # 5. Gradle (aapt2 from Termux; the SDK's x86 aapt2 cannot run here)
 chmod +x gradlew
