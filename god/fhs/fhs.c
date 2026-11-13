@@ -309,15 +309,16 @@ void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!
 // Applications that install their own SIGSYS handler (Chromium's sandbox, Crashpad treats SIGSYS as a crash) would replace ours: sigaction/signal for SIGSYS
 // are answered without installing anything. FHS_SIGSYS=0 turns all of this off, FHS_SIGSYS_LOG=1 prints "fhs: SIGSYS syscall N -> ENOSYS" to stderr.
 #include <ucontext.h>
-static int fhs_sigsys_on;
+static int fhs_sigsys_on, fhs_sigsys_log;   // log flag is read once in the constructor: no getenv() inside a signal handler
 static void fhs_sigsys_handler(int sig, siginfo_t* si, void* uc) {
   (void)sig; if (si->si_code != 1 /* SYS_SECCOMP */) return;   // kill(SIGSYS) from a process: nothing to emulate
-  if (getenv("FHS_SIGSYS_LOG")) { char m[64] = "fhs: SIGSYS syscall "; size_t n = strlen(m); char d[12]; int k = 0; unsigned v = (unsigned)si->si_syscall;
+  if (fhs_sigsys_log) { char m[64] = "fhs: SIGSYS syscall "; size_t n = strlen(m); char d[12]; int k = 0; unsigned v = (unsigned)si->si_syscall;
     do { d[k++] = '0' + v % 10; v /= 10; } while (v); while (k) m[n++] = d[--k]; memcpy(m + n, " -> ENOSYS\n", 11); n += 11; int e = errno; if (write(2, m, n) < 0) {} errno = e; }
   ((ucontext_t*)uc)->uc_mcontext.regs[0] = (unsigned long long)(long long)-ENOSYS;
 }
 __attribute__((constructor)) static void fhs_sigsys_init(void) {
   const char* off = getenv("FHS_SIGSYS"); if (off && !strcmp(off, "0")) return;
+  fhs_sigsys_log = getenv("FHS_SIGSYS_LOG") != 0;
   static int (*real)(int, const struct sigaction*, struct sigaction*); if (!real) real = dlsym(RTLD_NEXT, "sigaction"); if (!real) return;
   struct sigaction sa; memset(&sa, 0, sizeof sa); sa.sa_sigaction = fhs_sigsys_handler; sa.sa_flags = SA_SIGINFO | SA_NODEFER; sigemptyset(&sa.sa_mask);
   if (real(SIGSYS, &sa, 0) == 0) fhs_sigsys_on = 1;
