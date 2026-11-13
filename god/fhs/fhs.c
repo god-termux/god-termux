@@ -233,22 +233,24 @@ int system(const char* cmd) {
 #define REAL(ret, name, args) static ret (*r_##name) args; 
 #define LOAD(name) if (!r_##name) r_##name = dlsym(RTLD_NEXT, #name)
 #define P(x) char _b[PATH_MAX]; x = fmap(x, _b)
+// creating operation: drop cached mappings only when the path can change one (decided on the ORIGINAL path, before it is rewritten)
+#define PW(x, c) char _b[PATH_MAX]; int _w = (c) && fhs_dirty(x); x = fmap(x, _b); if (_w) fhs_cache_clear()
 // Under fhs-run (ABI 1) the translated path goes to the kernel directly, tagged, instead of through libc and the supervisor,
 // which would only pass it on. FHS_FAST_OFF=1 or no supervisor: libc as before.
 #define FAST fhs_fast_active()
 #define OMODE(fl, m) ((((fl) & O_CREAT) || ((fl) & O_TMPFILE) == O_TMPFILE) ? (m) : 0)
 
 int open(const char* p, int fl, ...) { va_list ap; va_start(ap, fl); mode_t m = va_arg(ap, mode_t); va_end(ap);
-  static int (*r)(const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "open"); P(p); if (fl & O_CREAT) fhs_cache_clear();
+  static int (*r)(const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "open"); PW(p, fl & O_CREAT);
   if (FAST) return FHS_TAGGED(SYS_openat, AT_FDCWD, p, fl, OMODE(fl, m), 0); return r(p, fl, m); }
 int open64(const char* p, int fl, ...) { va_list ap; va_start(ap, fl); mode_t m = va_arg(ap, mode_t); va_end(ap);
-  static int (*r)(const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "open64"); P(p); if (fl & O_CREAT) fhs_cache_clear();
+  static int (*r)(const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "open64"); PW(p, fl & O_CREAT);
   if (FAST) return FHS_TAGGED(SYS_openat, AT_FDCWD, p, fl, OMODE(fl, m), 0); return r(p, fl, m); }
 int openat(int d, const char* p, int fl, ...) { va_list ap; va_start(ap, fl); mode_t m = va_arg(ap, mode_t); va_end(ap);
-  static int (*r)(int, const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "openat"); P(p); if (fl & O_CREAT) fhs_cache_clear();
+  static int (*r)(int, const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "openat"); PW(p, fl & O_CREAT);
   if (FAST) return FHS_TAGGED(SYS_openat, d, p, fl, OMODE(fl, m), 0); return r(d, p, fl, m); }
 int openat64(int d, const char* p, int fl, ...) { va_list ap; va_start(ap, fl); mode_t m = va_arg(ap, mode_t); va_end(ap);
-  static int (*r)(int, const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "openat64"); P(p); if (fl & O_CREAT) fhs_cache_clear();
+  static int (*r)(int, const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "openat64"); PW(p, fl & O_CREAT);
   if (FAST) return FHS_TAGGED(SYS_openat, d, p, fl, OMODE(fl, m), 0); return r(d, p, fl, m); }
 FILE* fopen(const char* p, const char* m) { static FILE* (*r)(const char*, const char*); if (!r) r = dlsym(RTLD_NEXT, "fopen"); P(p); return r(p, m); }
 FILE* fopen64(const char* p, const char* m) { static FILE* (*r)(const char*, const char*); if (!r) r = dlsym(RTLD_NEXT, "fopen64"); P(p); return r(p, m); }
@@ -321,9 +323,9 @@ ssize_t __readlink_chk(const char* p, char* b, size_t n, size_t bl) { return rea
 ssize_t __readlinkat_chk(int d, const char* p, char* b, size_t n, size_t bl) { return readlinkat(d, p, b, n); }
 DIR* opendir(const char* p) { static DIR* (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "opendir"); P(p); return r(p); }
 int chdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "chdir"); P(p); return r(p); }
-int mkdir(const char* p, mode_t m) { static int (*r)(const char*, mode_t); if (!r) r = dlsym(RTLD_NEXT, "mkdir"); P(p); fhs_cache_clear(); if (FAST) return FHS_TAGGED(SYS_mkdirat, AT_FDCWD, p, m, 0, 0); return r(p, m); }
-int unlink(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "unlink"); P(p); fhs_cache_clear(); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, 0, 0, 0); return r(p); }
-int rmdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "rmdir"); P(p); fhs_cache_clear(); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, AT_REMOVEDIR, 0, 0); return r(p); }
+int mkdir(const char* p, mode_t m) { static int (*r)(const char*, mode_t); if (!r) r = dlsym(RTLD_NEXT, "mkdir"); PW(p, 1); if (FAST) return FHS_TAGGED(SYS_mkdirat, AT_FDCWD, p, m, 0, 0); return r(p, m); }
+int unlink(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "unlink"); PW(p, 1); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, 0, 0, 0); return r(p); }
+int rmdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "rmdir"); PW(p, 1); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, AT_REMOVEDIR, 0, 0); return r(p); }
 void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "dlopen"); if (!p) return r(p, fl); P(p); return r(p, fl); }
 #endif
 

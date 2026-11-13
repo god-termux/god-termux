@@ -43,6 +43,13 @@ static __thread struct fhs_ce fhs_ctab[FHS_CN];
 static __thread struct fhs_ce* fhs_last;
 static volatile unsigned fhs_gen = 1;
 static void fhs_cache_clear(void) { fhs_gen++; }
+// Can creating/removing this path change a cached mapping? Mappings depend only on what exists below the FHS namespaces
+// and the Termux/glibc/Debian trees; /tmp always resolves to one place. Relative paths may point anywhere: clear.
+static int fhs_dirty(const char* p) {
+  if (!p || p[0] != '/') return 1;
+  if (fhs_scope(p)) return !pre(p, "/tmp");
+  return pre(p, PFX) || pre(p, GLIB) || pre(p, DEB);
+}
 static long fhs_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC_COARSE, &t); return t.tv_sec * 1000L + t.tv_nsec / 1000000; }
 static unsigned fhs_hash(const char* p) { unsigned h = 2166136261u; while (*p) h = (h ^ (unsigned char)*p++) * 16777619u; return h; }
 

@@ -3,23 +3,13 @@
 Код: `fhs.c` (LD_PRELOAD), `fhs-run.c` (seccomp-супервизор), `fhsmap.h`, установка и проверка: `app/src/main/java/com/termux/mod/GodRuntime.java`, `termux-shared/.../GodEnvironment.java`, профиль `god/runtime/glibc-fhs.sh`.
 Пометки: **проверено** (воспроизведено на телефоне), **гипотеза** (не подтверждено), **не сделано**.
 
-## 1. Unix-сокеты в /tmp не переназначаются (мешает Claude in Chrome)  — не сделано
+## 1. Unix-сокеты в /tmp (мешали Claude in Chrome): сделано частично
 
-**Проверено.** Хост расширения Claude (`claude --chrome-native-host`, Bun-бинарник 2.1.322) создаёт сокет по жёсткому пути `/tmp/claude-mcp-browser-bridge-unknown/<pid>.sock`. На Android `/tmp` системный (владелец `shell`, `drwxrwx--x`), приложению писать нельзя. Шим переназначает `/tmp` в `$PREFIX/tmp` только частично:
-- `mkdir` переназначается, каталог создаётся в `$PREFIX/tmp`;
-- `bind()` (адрес в `sockaddr_un.sun_path`) и проверка существования идут по настоящему `/tmp`.
-Следствие: если каталога нет, хост пишет `Socket server error` (bind не находит каталог); если каталог уже есть, `EEXIST: file already exists, mkdir '/tmp/claude-mcp-browser-bridge-unknown'` (mkdir видит каталог, проверка не видит). Переменные `TMPDIR` и `CLAUDE_CODE_TMPDIR` путь не меняют (проверено). Режим `FHS_DEBIAN=1` ничего не меняет.
+**Сделано (коммит `1ffe4a4b`):** в glibc-сборке добавлены `bind()`/`connect()` для `AF_UNIX` (подмена `/tmp/…` → `$PREFIX/tmp/…`) и `chmod`/`fchmodat`; раньше glibc-шим `bind` не перехватывал вовсе. Также: `errno` в `fmap()`, CRLF в шебанге, `posix_spawnp` через `fmap`+`stat`, `close(dn)` и обрезка длинного адреса в `fhs-run.c`. Проверено программой `bind+listen+connect` и тестами `god/tests/fhs`.
 
-**Воспроизведение:**
-```
-echo -n | timeout 4 ~/.claude/chrome/chrome-native-host 2>&1 | tail -c 450
-rm -rf $PREFIX/tmp/claude-mcp-browser-bridge-unknown   # прибрать за собой
-```
-
-**Что сделать:**
-- обернуть `bind()`, `connect()` (и `getsockname`/`accept` при необходимости) в `fhs.c`: для `AF_UNIX` с `sun_path`, начинающимся с `/tmp/`, подставлять `$PREFIX/tmp/` (учесть лимит 108 байт в `sun_path`: `$PREFIX/tmp` это 35 символов, весь путь сокета Claude 80 байт, запас есть, но для длинных имён проверять длину);
-- проверить, делает ли Bun эти вызовы через libc или прямыми системными вызовами (`strace` в Termux недоступен; проверить `LD_DEBUG=bindings` или `fhs-run` в режиме трассировки). Если прямыми, то нужна обработка `bind`/`connect` в seccomp-супервизоре `fhs-run` (чтение `sockaddr` из памяти процесса и подмена пути);
-- после правки: хост и сессия Claude Code должны видеть один и тот же каталог; тест: `FHS_DEBIAN=1 claude --chrome` плюс расширение в `~/.config/chrome-native`.
+**Причина `EEXIST` на втором запуске хоста (проверено 2026-11-13):** `chrome-native-host` — Bun-бинарник с `PT_INTERP`, шим запускает его через `ld.so` + `libfhs-glibc.so` без супервизора; Bun часть файловых проверок делает прямым `svc #0` (в обход libc). После `mkdir` → `EEXIST` проверка «это каталог?» идёт по настоящему `/tmp` и не находит его. Под `fhs-run` те же вызовы перехватываются, и второй запуск проходит.
+Проверка: при существующем `$PREFIX/tmp/claude-mcp-browser-bridge-unknown` голый запуск падает с `EEXIST`, `fhs-run ~/.claude/chrome/chrome-native-host` слушает сокет.
+**Не сделано:** запускать хост Claude через `fhs-run` (обёртка вокруг `~/.claude/chrome/chrome-native-host`); подтвердить подключение расширения (`FHS_DEBIAN=1 claude --chrome`).
 
 ## 2. Надёжность установки шима (из отчёта по `exec(login): Permission denied`)
 
@@ -51,3 +41,9 @@ rm -rf $PREFIX/tmp/claude-mcp-browser-bridge-unknown   # прибрать за �
 
 - `fhs-run.c:103`: предупреждение компилятора «incompatible pointer types» (`const uint64_t*` из `__u64[6]`): не влияет на работу, но стоит привести тип.
 - `fhs.c` содержит чужие правки, попавшие в коммит `7bcb1f42` (не внедрять шим в бинарники `/system`, `/apex`, `/vendor`; защита от пустого `shim`): добавить тест на них в `god/tests/fhs`.
+
+## 6. Оптимизации (ревью 2026-11-13)
+
+**Сделано:** точечная сброс кэша путей (`fhs_dirty` в `fhsmap.h`, макрос `PW` в `fhs.c`): `open*(O_CREAT)`, `mkdir`, `unlink`, `rmdir` сбрасывают кэш только для относительных путей, путей в FHS-областях (кроме `/tmp`) и путей внутри `PFX/GLIB/DEB`; решение принимается по исходному пути до переписывания. Бионик-обёртки (`fhs-bionic-io.h`) пока сбрасывают всё.
+**Отвергнуто после проверки:** отсечение BPF по `nr > 88` (ломает `statx` 291, `faccessat2` 439, `renameat2` 276, `bind` 200, `connect` 203); TTL кэша 30–60 с (устаревшие отображения между процессами); оценки «30–60 МБ» по `fhs_ctab` (это `.tbss`) и «10–20 МБ» по ассетам (всего ~2,5 МБ).
+**Пропущено:** ранний выход для `/system|/apex|/vendor` до `stat/open` в `prepare()`: нужен заголовок файла (скрипты с шебангом), а для ELF уже есть кэш `fc_get`; выигрыш мал при ненулевом риске.
