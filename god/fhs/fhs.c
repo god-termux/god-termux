@@ -16,6 +16,9 @@
 #include <sys/wait.h>
 #include <dirent.h>
 #include <signal.h>
+#include <stddef.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define LDSO GLIB "/lib/ld-linux-aarch64.so.1"
 #define SHIM_G GLIB "/shim/libfhs-glibc.so"
@@ -131,7 +134,7 @@ static int prepare(struct prep_mem* mem, const char* path, char* const argv[], c
     if (fd >= 0) { n = read(fd, h, sizeof h); close(fd); }
     if (fd < 0 || n < 4) { *op = real; *oa = av; *oe = (char**)envp; return 0; }
     if (h[0] == '#' && h[1] == '!' && depth++ < 4) {
-      char line[512]; size_t m = n < 511 ? n : 511; memcpy(line, h, m); line[m] = 0; char* nl = strchr(line, '\n'); if (nl) *nl = 0;
+      char line[512]; size_t m = n < 511 ? n : 511; memcpy(line, h, m); line[m] = 0; char* nl = strchr(line, '\n'); if (nl) *nl = 0; if (nl && nl > line && nl[-1] == '\r') nl[-1] = 0;   // CRLF scripts: no stray \r on the interpreter path
       char* ip = line + 2; while (*ip == ' ' || *ip == '\t') ip++;
       char* sp = ip; while (*sp && *sp != ' ' && *sp != '\t') sp++;
       char* arg = 0; if (*sp) { *sp++ = 0; while (*sp == ' ' || *sp == '\t') sp++; if (*sp) arg = sp; }
@@ -215,7 +218,8 @@ int posix_spawnp(pid_t* pid, const char* file, const posix_spawn_file_actions_t*
   if (strchr(file, '/')) return posix_spawn(pid, file, fa, at, argv, envp);
   const char* pa = getenv("PATH"); if (!pa) pa = "/usr/bin:/bin"; char* t = strdup(pa); if (!t) return ENOMEM; char* save; int r = ENOENT;
   for (char* d = strtok_r(t, ":", &save); d; d = strtok_r(NULL, ":", &save)) { char f[PATH_MAX]; snprintf(f, sizeof f, "%s/%s", d, file);
-    if (access(f, X_OK) == 0) { r = posix_spawn(pid, f, fa, at, argv, envp); break; } }
+    char mb[PATH_MAX]; const char* mf = fmap(f, mb); struct stat pst;   // PATH entries like /usr/bin are FHS paths; a directory with the name must not win
+    if (stat(mf, &pst) == 0 && S_ISREG(pst.st_mode) && access(mf, X_OK) == 0) { r = posix_spawn(pid, f, fa, at, argv, envp); break; } }
   free(t); return r;
 }
 int system(const char* cmd) {
@@ -257,6 +261,24 @@ int fstatat64(int d, const char* p, struct stat64* s, int f) { static int (*r)(i
 int statx(int d, const char* p, int f, unsigned m, struct statx* s) { static int (*r)(int, const char*, int, unsigned, struct statx*); if (!r) r = dlsym(RTLD_NEXT, "statx"); P(p); if (FAST) return FHS_TAGGED(SYS_statx, d, p, f, m, s); return r(d, p, f, m, s); }
 int access(const char* p, int m) { static int (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "access"); P(p); if (FAST) return FHS_TAGGED(SYS_faccessat, AT_FDCWD, p, m, 0, 0); return r(p, m); }
 int faccessat(int d, const char* p, int m, int f) { static int (*r)(int, const char*, int, int); if (!r) r = dlsym(RTLD_NEXT, "faccessat"); P(p); if (FAST && !f) return FHS_TAGGED(SYS_faccessat, d, p, m, 0, 0); return r(d, p, m, f); }
+// AF_UNIX bind/connect with FHS paths (/tmp/..., /run/...): the address sits in sockaddr_un, not in a path argument, so open/stat-style hooks never saw it.
+// Without this a program could mkdir /tmp/x (mapped) and then bind /tmp/x/s.sock (not mapped): Claude's browser bridge died exactly like that.
+// Only absolute pathnames are rewritten; abstract (leading NUL) and relative addresses and non-FHS paths are passed through untouched.
+static int fhs_sockfix(const struct sockaddr* a, socklen_t l, struct sockaddr_un* o, socklen_t* ol, int create) {
+  if (!a || l <= offsetof(struct sockaddr_un, sun_path) || a->sa_family != AF_UNIX) return 0;
+  const struct sockaddr_un* u = (const struct sockaddr_un*)a; if (u->sun_path[0] != '/') return 0;
+  char orig[sizeof u->sun_path + 1], b[PATH_MAX]; size_t n = l - offsetof(struct sockaddr_un, sun_path); if (n > sizeof u->sun_path) n = sizeof u->sun_path;
+  size_t k = 0; while (k < n && u->sun_path[k]) k++; memcpy(orig, u->sun_path, k); orig[k] = 0;
+  fhs_create = create; const char* m = fmap(orig, b); fhs_create = 0;
+  if (m == orig || strlen(m) >= sizeof o->sun_path) return 0;
+  memset(o, 0, sizeof *o); o->sun_family = AF_UNIX; strcpy(o->sun_path, m); *ol = offsetof(struct sockaddr_un, sun_path) + strlen(m) + 1; return 1;
+}
+int bind(int fd, const struct sockaddr* a, socklen_t l) { static int (*r)(int, const struct sockaddr*, socklen_t); if (!r) r = dlsym(RTLD_NEXT, "bind");
+  struct sockaddr_un o; socklen_t ol; if (fhs_sockfix(a, l, &o, &ol, 1)) return r(fd, (const struct sockaddr*)&o, ol); return r(fd, a, l); }
+int connect(int fd, const struct sockaddr* a, socklen_t l) { static int (*r)(int, const struct sockaddr*, socklen_t); if (!r) r = dlsym(RTLD_NEXT, "connect");
+  struct sockaddr_un o; socklen_t ol; if (fhs_sockfix(a, l, &o, &ol, 0)) return r(fd, (const struct sockaddr*)&o, ol); return r(fd, a, l); }
+int chmod(const char* p, mode_t m) { static int (*r)(const char*, mode_t); if (!r) r = dlsym(RTLD_NEXT, "chmod"); P(p); return r(p, m); }
+int fchmodat(int d, const char* p, mode_t m, int f) { static int (*r)(int, const char*, mode_t, int); if (!r) r = dlsym(RTLD_NEXT, "fchmodat"); P(p); return r(d, p, m, f); }
 static ssize_t fhs_selfexe(const char* p, char* b, size_t n) {   // readlink("/proc/self/exe") for processes started through the loader
   if (!p || strcmp(p, "/proc/self/exe")) return -2;
   const char* fe = getenv("FHS_EXE"); if (!fe || !fe[0]) return -2;

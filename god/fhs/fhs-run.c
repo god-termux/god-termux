@@ -121,7 +121,7 @@ static int handle_write_i(int fd, struct seccomp_notif* rq) {
 }
 // AF_UNIX bind/connect with FHS paths (e.g. /tmp/.X11-unix/X0): the socket belongs to the tracee, so operate on a duplicate via pidfd_getfd
 static int handle_sock(int fd, struct seccomp_notif* rq) {
-  const uint64_t* a = rq->data.args; socklen_t len = (socklen_t)a[2]; if (len < 3 || len > sizeof(struct sockaddr_un)) return 0;
+  const uint64_t* a = rq->data.args; socklen_t len = (socklen_t)a[2]; if (len < 3) return 0; if (len > sizeof(struct sockaddr_un)) len = sizeof(struct sockaddr_un);   // callers may pass sizeof(sockaddr_storage); the path never needs more
   struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
   if (rdmem(rq->pid, a[1], &sa, len) != (ssize_t)len || sa.sun_family != AF_UNIX || sa.sun_path[0] != '/') return 0;
   char orig[PATH_MAX], mp[PATH_MAX]; snprintf(orig, sizeof orig, "%.*s", (int)(len - offsetof(struct sockaddr_un, sun_path)), sa.sun_path);
@@ -179,7 +179,7 @@ static void write_stats(void) {
   char b[64]; int n = snprintf(b, sizeof b, "notifications=%lu\n", stat_calls); if (write(o, b, n) < 0) {} close(o);
 }
 static void supervisor(int sock) {
-  int fd = recv_fd(sock); close(sock); int dn = open("/dev/null", O_RDWR); dup2(dn, 0); dup2(dn, 1); dup2(dn, 2);
+  int fd = recv_fd(sock); close(sock); int dn = open("/dev/null", O_RDWR); dup2(dn, 0); dup2(dn, 1); dup2(dn, 2); if (dn > 2) close(dn);
   if (fd < 0) _exit(1);
   // Linux 6.6+: wake the supervisor on the caller's CPU instead of waiting for another core to leave idle. Older kernels refuse; that is fine.
   if (!getenv("FHS_SUP_NOSYNC")) ioctl(fd, SECCOMP_IOCTL_NOTIF_SET_FLAGS, SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP);

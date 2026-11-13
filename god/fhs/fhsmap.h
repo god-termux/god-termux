@@ -1,3 +1,4 @@
+#include <errno.h>
 #pragma once
 #include <limits.h>
 #include <string.h>
@@ -68,10 +69,11 @@ static int fhs_acct_open(const char* path, int flags) {
 }
 static const char* fmap_i(const char* in, char* out);
 static const char* fmap(const char* in, char* out) {
+  int se = errno;   // the candidate probes (and the trace write) fail with ENOENT/anything: the caller's errno must survive a successful call
   const char* r = fmap_i(in, out);
   if (fhs_trace < 0) fhs_trace = getenv("FHS_TRACE") != 0;
   if (fhs_trace && in && in[0] == '/') fhs_tr(in, r == in ? 0 : r);
-  return r;
+  errno = se; return r;
 }
 static const char* fmap_i(const char* in, char* out) {
   if (!in || in[0] != '/') return in;
