@@ -20,3 +20,42 @@ int linkat(int od, const char* o, int nd, const char* n, int flags) {
   return copy(od, o, nd, n);
 }
 int link(const char* o, const char* n) { return linkat(AT_FDCWD, o, AT_FDCWD, n, 0); }
+
+// dpkg repeats these two lookups for every archive member. Cache bionic's own
+// successful root result per thread; never change ordinary passwd/group opens.
+#include <pwd.h>
+#undef getpwnam
+#include <grp.h>
+#include <stdlib.h>
+#include <string.h>
+static int root_cache_enabled(void) { return getenv("FHS_DEBIAN") && !getenv("DAPT_NOCACHE_ROOT"); }
+struct passwd* getpwnam(const char* name) {
+  static __thread struct passwd cached;
+  static __thread char buffer[4096] __attribute__((aligned(16)));
+  static __thread int ready;
+  if (root_cache_enabled() && !strcmp(name, "root")) {
+    if (!ready) {
+      int (*lookup)(const char*, struct passwd*, char*, size_t, struct passwd**) = dlsym(RTLD_NEXT, "getpwnam_r");
+      struct passwd* result = NULL; int saved = errno;
+      if (lookup && !lookup(name, &cached, buffer, sizeof buffer, &result) && result) ready = 1;
+      errno = saved;
+    }
+    if (ready) return &cached;
+  }
+  struct passwd* (*real)(const char*) = dlsym(RTLD_NEXT, "getpwnam"); return real(name);
+}
+struct group* getgrnam(const char* name) {
+  static __thread struct group cached;
+  static __thread char buffer[4096] __attribute__((aligned(16)));
+  static __thread int ready;
+  if (root_cache_enabled() && !strcmp(name, "root")) {
+    if (!ready) {
+      int (*lookup)(const char*, struct group*, char*, size_t, struct group**) = dlsym(RTLD_NEXT, "getgrnam_r");
+      struct group* result = NULL; int saved = errno;
+      if (lookup && !lookup(name, &cached, buffer, sizeof buffer, &result) && result) ready = 1;
+      errno = saved;
+    }
+    if (ready) return &cached;
+  }
+  struct group* (*real)(const char*) = dlsym(RTLD_NEXT, "getgrnam"); return real(name);
+}

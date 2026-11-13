@@ -8,7 +8,7 @@ if [ -z "$FHS_OFF" ] && [ ! -f "$HOME/.termux/fhs.off" ] && [ -f "$PREFIX/glibc/
     esac
     # the shell itself must carry the shim too: re-exec once (interactive login shells only)
     if [ -n "$BASH" ] && [ -z "$FHS_REEXEC" ] && [ -t 0 ] && case $- in *i*) true;; *) false;; esac \
-       && ! grep -q libfhs-bionic "/proc/$$/maps" 2>/dev/null; then
+       && case "$(< "/proc/$$/maps")" in *libfhs-bionic*) false;; *) true;; esac 2>/dev/null; then
       export FHS_REEXEC=1
       exec -a "-bash" "$BASH"
     fi

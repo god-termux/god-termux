@@ -1,0 +1,48 @@
+mkdir: 0
+mkdir again: -1 File exists
+create: 1
+write: 5
+cloexec: 1
+stat: 0
+size: 5
+mode: 384
+statx: 0
+statx size: 5
+access: 0
+access missing: -1 No such file or directory
+chmod: 0
+mode after chmod: 416
+utimens: 0
+mtime: 2000
+symlink: 0
+readlink: 4
+target: file
+lstat link: 0
+is link: 1
+rename: 0
+old gone: -1 No such file or directory
+chdir: 0
+rename relative->fhs: 0
+link: -1 Permission denied
+read back: 5
+no cloexec: 0
+stat across pages: 0
+stat at page end: 0
+unterminated: -1 Bad address
+too long: -1 File name too long
+bad pointer: -1 Bad address
+stat into bad buffer: -1 Bad address
+bind: 0
+listen: 0
+connect: 0
+socket file: 0
+is socket: 1
+unlink sock: 0
+unlink link: 0
+unlink hard: -1 No such file or directory
+unlink file3: 0
+rmdir: 0
+dir gone: -1 No such file or directory
+new: account lookup open not redirected: 1
+new: ordinary open still redirected: 1
+new: O_PATH open: 1 usable as directory: 1

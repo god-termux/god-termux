@@ -8,18 +8,26 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 #include <poll.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "fhsmap.h"
+#include "fhs-fast.h"
 extern char** environ;
 #ifndef __NR_faccessat2
 #define __NR_faccessat2 439
 #endif
 #ifndef __NR_renameat
 #define __NR_renameat 38
+#endif
+#ifndef SECCOMP_IOCTL_NOTIF_SET_FLAGS
+#define SECCOMP_IOCTL_NOTIF_SET_FLAGS SECCOMP_IOW(4, __u64)
+#endif
+#ifndef SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP
+#define SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP (1UL << 0)
 #endif
 static const int NRS[] = {__NR_openat, __NR_newfstatat, __NR_faccessat, __NR_faccessat2, __NR_readlinkat, __NR_statx,
   __NR_mkdirat, __NR_unlinkat, __NR_symlinkat, __NR_linkat, __NR_renameat, __NR_renameat2, __NR_fchmodat, __NR_fchownat, __NR_utimensat, __NR_bind, __NR_connect};
@@ -33,10 +41,38 @@ static int recv_fd(int s) { char c; struct iovec io = {&c, 1}; char cb[CMSG_SPAC
   m.msg_iov = &io; m.msg_iovlen = 1; m.msg_control = cb; m.msg_controllen = sizeof cb;
   if (recvmsg(s, &m, 0) <= 0) return -1; struct cmsghdr* h = CMSG_FIRSTHDR(&m); if (!h) return -1; int fd; memcpy(&fd, CMSG_DATA(h), sizeof fd); return fd; }
 
-static int rdstr(int mem, uint64_t addr, char* buf, size_t n) {
-  addr &= 0x00ffffffffffffffULL;   // strip the ARM top-byte (heap tag) from user pointers
-  ssize_t k = pread(mem, buf, n - 1, addr); if (k <= 0) return -1; buf[k] = 0; return memchr(buf, 0, k + 1) ? 0 : -1; }
-static int wr(int mem, uint64_t addr, const void* b, size_t n) { addr &= 0x00ffffffffffffffULL; return pwrite(mem, b, n, addr) == (ssize_t)n ? 0 : -1; }
+// Tracee memory: process_vm_readv/writev need no descriptor. /proc/PID/mem (one open per access) is only the fallback.
+#define UNTAG(a) ((a) & 0x00ffffffffffffffULL)   // strip the ARM top-byte (heap tag) from user pointers
+#ifndef FHS_VM_DEFAULT
+#define FHS_VM_DEFAULT 1   // tests build with 0 to exercise the /proc/PID/mem fallback
+#endif
+static int vm_ok = FHS_VM_DEFAULT;
+static ssize_t rdmem(int pid, uint64_t addr, void* buf, size_t n) {
+  addr = UNTAG(addr);
+  if (vm_ok) { struct iovec l = {buf, n}, r = {(void*)(uintptr_t)addr, n};
+    ssize_t k = syscall(__NR_process_vm_readv, pid, &l, 1UL, &r, 1UL, 0UL); if (k >= 0) return k;
+    if (errno == EFAULT) return -1; if (errno == ENOSYS) vm_ok = 0; }
+  char pp[64]; snprintf(pp, sizeof pp, "/proc/%d/mem", pid); int mem = open(pp, O_RDONLY | O_CLOEXEC); if (mem < 0) return -1;
+  ssize_t k = pread(mem, buf, n, addr); int e = errno; close(mem); errno = e; return k;
+}
+// Reads a string of at most n-1 bytes. Each read stops at a page boundary, so a short path costs one call and an unmapped next page is harmless.
+static int rdstr(int pid, uint64_t addr, char* buf, size_t n) {
+  addr = UNTAG(addr);
+  for (size_t got = 0; got < n - 1;) {
+    size_t chunk = 4096 - ((addr + got) & 4095); if (chunk > n - 1 - got) chunk = n - 1 - got;
+    ssize_t k = rdmem(pid, addr + got, buf + got, chunk); if (k <= 0) return -1;
+    if (memchr(buf + got, 0, k)) return 0;
+    got += k;
+  }
+  return -1;
+}
+static int wr(int pid, uint64_t addr, const void* b, size_t n) {
+  addr = UNTAG(addr);
+  if (vm_ok) { struct iovec l = {(void*)b, n}, r = {(void*)(uintptr_t)addr, n};
+    if (syscall(__NR_process_vm_writev, pid, &l, 1UL, &r, 1UL, 0UL) == (ssize_t)n) return 0; }
+  char pp[64]; snprintf(pp, sizeof pp, "/proc/%d/mem", pid); int mem = open(pp, O_RDWR | O_CLOEXEC); if (mem < 0) return -1;
+  ssize_t k = pwrite(mem, b, n, addr); close(mem); return k == (ssize_t)n ? 0 : -1;
+}
 
 static void reply(int fd, struct seccomp_notif* rq, long val, int err, int cont) {
   struct seccomp_notif_resp r; memset(&r, 0, sizeof r); r.id = rq->id; r.val = val; r.error = err ? -err : 0; r.flags = cont ? SECCOMP_USER_NOTIF_FLAG_CONTINUE : 0;
@@ -44,8 +80,8 @@ static void reply(int fd, struct seccomp_notif* rq, long val, int err, int cont)
 
 
 // map path argument at tracee address; returns mapped string, or NULL if unchanged/relative/unreadable (buffers owned by caller)
-static const char* mapat(int mem, uint64_t addr, char* orig, char* mp) {
-  if (rdstr(mem, addr, orig, PATH_MAX) || orig[0] != '/') return NULL;
+static const char* mapat(int pid, uint64_t addr, char* orig, char* mp) {
+  if (rdstr(pid, addr, orig, PATH_MAX) || orig[0] != '/') return NULL;
   const char* m = fmap(orig, mp); return m == orig ? NULL : m;
 }
 // relative path of the traced process (dirfd or its cwd) -> absolute path, so that a rename/link with one translated and one relative name can be done here
@@ -55,27 +91,27 @@ static const char* absat(int pid, int dirfd, const char* rel, char* out) {
   ssize_t n = readlink(lp, base, sizeof base - 1); if (n <= 0) return NULL; base[n] = 0;
   snprintf(out, PATH_MAX, "%s/%s", base, rel); return out;
 }
-static int handle_write_i(int fd, struct seccomp_notif* rq, int mem);
-static int handle_write(int fd, struct seccomp_notif* rq, int mem) { fhs_create = 1; int r = handle_write_i(fd, rq, mem); fhs_create = 0; return r; }
-static int handle_write_i(int fd, struct seccomp_notif* rq, int mem) {
-  int nr = rq->data.nr; const uint64_t* a = rq->data.args; char o1[PATH_MAX], m1[PATH_MAX], o2[PATH_MAX], m2[PATH_MAX]; long res = 0;
+static int handle_write_i(int fd, struct seccomp_notif* rq);
+static int handle_write(int fd, struct seccomp_notif* rq) { fhs_create = 1; int r = handle_write_i(fd, rq); fhs_create = 0; return r; }
+static int handle_write_i(int fd, struct seccomp_notif* rq) {
+  int pid = rq->pid; int nr = rq->data.nr; const uint64_t* a = rq->data.args; char o1[PATH_MAX], m1[PATH_MAX], o2[PATH_MAX], m2[PATH_MAX]; long res = 0;
   if (nr == __NR_mkdirat || nr == __NR_unlinkat || nr == __NR_fchmodat || nr == __NR_fchownat || nr == __NR_utimensat) {
-    const char* m = mapat(mem, a[1], o1, m1); if (!m) return 0;
+    const char* m = mapat(pid, a[1], o1, m1); if (!m) return 0;
     if (nr == __NR_mkdirat) res = syscall(__NR_mkdirat, AT_FDCWD, m, (mode_t)a[2]);
     else if (nr == __NR_unlinkat) res = syscall(__NR_unlinkat, AT_FDCWD, m, (int)a[2]);
     else if (nr == __NR_fchmodat) res = syscall(__NR_fchmodat, AT_FDCWD, m, (mode_t)a[2]);
     else if (nr == __NR_fchownat) res = syscall(__NR_fchownat, AT_FDCWD, m, (uid_t)a[2], (gid_t)a[3], (int)a[4]);
-    else { char ts[32]; int has = a[2] != 0; if (has && pread(mem, ts, 32, a[2] & 0x00ffffffffffffffULL) != 32) { reply(fd, rq, 0, EFAULT, 0); return 1; }
+    else { char ts[32]; int has = a[2] != 0; if (has && rdmem(pid, a[2], ts, 32) != 32) { reply(fd, rq, 0, EFAULT, 0); return 1; }
            res = syscall(__NR_utimensat, AT_FDCWD, m, has ? ts : NULL, (int)a[3]); }
   } else if (nr == __NR_symlinkat) {
-    char tgt[PATH_MAX]; const char* m = mapat(mem, a[2], o1, m1); if (!m) return 0;
-    if (rdstr(mem, a[0], tgt, sizeof tgt)) { reply(fd, rq, 0, EFAULT, 0); return 1; }
+    char tgt[PATH_MAX]; const char* m = mapat(pid, a[2], o1, m1); if (!m) return 0;
+    if (rdstr(pid, a[0], tgt, sizeof tgt)) { reply(fd, rq, 0, EFAULT, 0); return 1; }
     res = syscall(__NR_symlinkat, tgt, AT_FDCWD, m);
   } else if (nr == __NR_linkat || nr == __NR_renameat || nr == __NR_renameat2) {
-    const char* p1 = mapat(mem, a[1], o1, m1); const char* p2 = mapat(mem, a[3], o2, m2);
+    const char* p1 = mapat(pid, a[1], o1, m1); const char* p2 = mapat(pid, a[3], o2, m2);
     if (!p1 && !p2) return 0;
-    if (!p1) { if (rdstr(mem, a[1], o1, sizeof o1)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p1 = o1; if (o1[0] != '/') { if (!absat(rq->pid, (int)a[0], o1, m1)) return 0; p1 = m1; } }
-    if (!p2) { if (rdstr(mem, a[3], o2, sizeof o2)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p2 = o2; if (o2[0] != '/') { if (!absat(rq->pid, (int)a[2], o2, m2)) return 0; p2 = m2; } }
+    if (!p1) { if (rdstr(pid, a[1], o1, sizeof o1)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p1 = o1; if (o1[0] != '/') { if (!absat(rq->pid, (int)a[0], o1, m1)) return 0; p1 = m1; } }
+    if (!p2) { if (rdstr(pid, a[3], o2, sizeof o2)) { reply(fd, rq, 0, EFAULT, 0); return 1; } p2 = o2; if (o2[0] != '/') { if (!absat(rq->pid, (int)a[2], o2, m2)) return 0; p2 = m2; } }
     if (nr == __NR_linkat) res = syscall(__NR_linkat, AT_FDCWD, p1, AT_FDCWD, p2, (int)a[4]);
     else if (nr == __NR_renameat2) res = syscall(__NR_renameat2, AT_FDCWD, p1, AT_FDCWD, p2, (unsigned)a[4]);
     else res = syscall(__NR_renameat2, AT_FDCWD, p1, AT_FDCWD, p2, 0u);
@@ -84,10 +120,10 @@ static int handle_write_i(int fd, struct seccomp_notif* rq, int mem) {
   reply(fd, rq, res < 0 ? 0 : res, res < 0 ? errno : 0, 0); return 1;
 }
 // AF_UNIX bind/connect with FHS paths (e.g. /tmp/.X11-unix/X0): the socket belongs to the tracee, so operate on a duplicate via pidfd_getfd
-static int handle_sock(int fd, struct seccomp_notif* rq, int mem) {
+static int handle_sock(int fd, struct seccomp_notif* rq) {
   const uint64_t* a = rq->data.args; socklen_t len = (socklen_t)a[2]; if (len < 3 || len > sizeof(struct sockaddr_un)) return 0;
   struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
-  if (pread(mem, &sa, len, a[1] & 0x00ffffffffffffffULL) != (ssize_t)len || sa.sun_family != AF_UNIX || sa.sun_path[0] != '/') return 0;
+  if (rdmem(rq->pid, a[1], &sa, len) != (ssize_t)len || sa.sun_family != AF_UNIX || sa.sun_path[0] != '/') return 0;
   char orig[PATH_MAX], mp[PATH_MAX]; snprintf(orig, sizeof orig, "%.*s", (int)(len - offsetof(struct sockaddr_un, sun_path)), sa.sun_path);
   fhs_create = (rq->data.nr == __NR_bind); const char* m = fmap(orig, mp); fhs_create = 0;
   if (m == orig || strlen(m) >= sizeof sa.sun_path) return 0;
@@ -101,43 +137,59 @@ static int handle_sock(int fd, struct seccomp_notif* rq, int mem) {
 }
 static void handle(int fd, struct seccomp_notif* rq) {
   int nr = rq->data.nr; const uint64_t* a = rq->data.args; int pi = (nr == __NR_openat || nr == __NR_newfstatat || nr == __NR_faccessat || nr == __NR_faccessat2 || nr == __NR_readlinkat || nr == __NR_statx) ? 1 : -1;
-  char pp[64]; snprintf(pp, sizeof pp, "/proc/%d/mem", rq->pid); int mem = open(pp, O_RDWR);
-  if (mem >= 0 && (nr == __NR_bind || nr == __NR_connect)) { int r = handle_sock(fd, rq, mem); if (!r) reply(fd, rq, 0, 0, 1); close(mem); return; }
-  if (mem >= 0 && handle_write(fd, rq, mem)) { close(mem); return; }
+  int pid = rq->pid;   // tracee memory is addressed by pid
+  if (nr == __NR_bind || nr == __NR_connect) { if (!handle_sock(fd, rq)) reply(fd, rq, 0, 0, 1); return; }
+  if (pi < 0) { if (!handle_write(fd, rq)) reply(fd, rq, 0, 0, 1); return; }
   char path[PATH_MAX], mp[PATH_MAX];
-  if (mem < 0 || pi < 0 || rdstr(mem, a[pi], path, sizeof path) || path[0] != '/') { if (mem >= 0) close(mem); reply(fd, rq, 0, 0, 1); return; }
+  if (rdstr(pid, a[pi], path, sizeof path) || path[0] != '/') { reply(fd, rq, 0, 0, 1); return; }
+  if (nr == __NR_openat && fhs_acct_open(path, (int)a[2])) { reply(fd, rq, 0, 0, 1); return; }   // bionic's own account lookup
   fhs_create = (nr == __NR_openat && ((int)a[2] & O_CREAT)) ? 1 : 0;
   const char* m = fmap(path, mp); fhs_create = 0;
-  if (m == path) { close(mem); reply(fd, rq, 0, 0, 1); return; }
-  if (ioctl(fd, SECCOMP_IOCTL_NOTIF_ID_VALID, &rq->id) < 0) { close(mem); return; }
+  if (m == path) { reply(fd, rq, 0, 0, 1); return; }
+  if (ioctl(fd, SECCOMP_IOCTL_NOTIF_ID_VALID, &rq->id) < 0) return;
   long res = 0; int e = 0;
   if (nr == __NR_openat) {
-    int nf = open(m, (int)a[2], (mode_t)a[3]);
+    int fl = (int)a[2];
+    // The kernel refuses to hand an O_PATH descriptor to another process (SECCOMP_IOCTL_NOTIF_ADDFD: EBADF), which made every
+    // O_PATH open of a translated name fail, among them the ones inside bionic's realpath() and fchmodat(AT_SYMLINK_NOFOLLOW).
+    // Give an ordinary read-only descriptor instead: fstat, /proc/self/fd/N, fchmod and use as a directory all work on it.
+    // What is lost: names the caller cannot read, and O_NOFOLLOW on a symlink (ELOOP instead of a descriptor for the link).
+    if (fl & O_PATH) fl = (fl & (O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW)) | O_RDONLY | O_NONBLOCK;
+    int nf = open(m, fl, (mode_t)a[3]);
     if (nf < 0) { e = errno; }
-    else { struct seccomp_notif_addfd af; memset(&af, 0, sizeof af); af.id = rq->id; af.flags = SECCOMP_ADDFD_FLAG_SEND; af.srcfd = nf; af.newfd_flags = ((int)a[2] & O_CLOEXEC) ? O_CLOEXEC : 0;
-      int r = ioctl(fd, SECCOMP_IOCTL_NOTIF_ADDFD, &af); close(nf); close(mem); if (r >= 0) return; reply(fd, rq, 0, errno, 0); return; }
+    else { struct seccomp_notif_addfd af; memset(&af, 0, sizeof af); af.id = rq->id; af.flags = SECCOMP_ADDFD_FLAG_SEND; af.srcfd = nf; af.newfd_flags = (fl & O_CLOEXEC) ? O_CLOEXEC : 0;
+      int r = ioctl(fd, SECCOMP_IOCTL_NOTIF_ADDFD, &af); close(nf); if (r >= 0) return; reply(fd, rq, 0, errno, 0); return; }
   } else if (nr == __NR_newfstatat) {
-    char kst[256]; res = syscall(__NR_newfstatat, AT_FDCWD, m, kst, (int)a[3]); if (res < 0) e = errno; else if (wr(mem, a[2], kst, 128)) e = EFAULT;
+    char kst[256]; res = syscall(__NR_newfstatat, AT_FDCWD, m, kst, (int)a[3]); if (res < 0) e = errno; else if (wr(pid, a[2], kst, 128)) e = EFAULT;
   } else if (nr == __NR_statx) {
-    char kst[256]; res = syscall(__NR_statx, AT_FDCWD, m, (int)a[2], (unsigned)a[3], kst); if (res < 0) e = errno; else if (wr(mem, a[4], kst, 256)) e = EFAULT;
+    char kst[256]; res = syscall(__NR_statx, AT_FDCWD, m, (int)a[2], (unsigned)a[3], kst); if (res < 0) e = errno; else if (wr(pid, a[4], kst, 256)) e = EFAULT;
   } else if (nr == __NR_faccessat || nr == __NR_faccessat2) {
     res = syscall(__NR_faccessat, AT_FDCWD, m, (int)a[2], 0); if (res < 0) e = errno;
   } else if (nr == __NR_readlinkat) {
-    char lb[PATH_MAX]; size_t sz = a[3] < sizeof lb ? a[3] : sizeof lb; res = readlink(m, lb, sz); if (res < 0) e = errno; else if (wr(mem, a[2], lb, res)) e = EFAULT;
+    char lb[PATH_MAX]; size_t sz = a[3] < sizeof lb ? a[3] : sizeof lb; res = readlink(m, lb, sz); if (res < 0) e = errno; else if (wr(pid, a[2], lb, res)) e = EFAULT;
   }
-  close(mem); reply(fd, rq, e ? 0 : res, e, 0);
+  reply(fd, rq, e ? 0 : res, e, 0);
 }
 
+// FHS_SUP_STATS=FILE: when the last supervised process exits, write how many calls were intercepted (diagnostics and tests).
+static unsigned long stat_calls;
+static void write_stats(void) {
+  const char* f = getenv("FHS_SUP_STATS"); if (!f || !*f) return;
+  int o = open(f, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); if (o < 0) return;
+  char b[64]; int n = snprintf(b, sizeof b, "notifications=%lu\n", stat_calls); if (write(o, b, n) < 0) {} close(o);
+}
 static void supervisor(int sock) {
   int fd = recv_fd(sock); close(sock); int dn = open("/dev/null", O_RDWR); dup2(dn, 0); dup2(dn, 1); dup2(dn, 2);
   if (fd < 0) _exit(1);
+  // Linux 6.6+: wake the supervisor on the caller's CPU instead of waiting for another core to leave idle. Older kernels refuse; that is fine.
+  if (!getenv("FHS_SUP_NOSYNC")) ioctl(fd, SECCOMP_IOCTL_NOTIF_SET_FLAGS, SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP);
   struct seccomp_notif_sizes sz; syscall(__NR_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, &sz);
   struct seccomp_notif* rq = malloc(sz.seccomp_notif);
   for (;;) { struct pollfd pf = {fd, POLLIN, 0}; if (poll(&pf, 1, -1) < 0 && errno != EINTR) break;
     if ((pf.revents & (POLLHUP | POLLERR)) && !(pf.revents & POLLIN)) break;
     memset(rq, 0, sz.seccomp_notif); if (ioctl(fd, SECCOMP_IOCTL_NOTIF_RECV, rq) < 0) { if (errno == EINTR || errno == ENOENT) continue; break; }
-    handle(fd, rq); }
-  _exit(0);
+    stat_calls++; handle(fd, rq); }
+  write_stats(); _exit(0);
 }
 
 int main(int argc, char** argv) {
@@ -145,17 +197,24 @@ int main(int argc, char** argv) {
   int sp[2]; if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp)) return 127;
   pid_t p = fork(); if (p == 0) { close(sp[0]); setsid(); supervisor(sp[1]); }
   close(sp[1]); prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-  struct sock_filter f[2 + NN * 2 + 2]; int k = 0;
+  struct sock_filter f[9 + NN * 2 + 1]; int k = 0;
   f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
   f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0);
+  f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+  // Calls made from the shim's trampoline (fhs-fast.h): the shim has already translated the path. Everything else is intercepted.
+  f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer));
+  f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)FHS_FAST_IP, 0, 3);
+  f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer) + 4);
+  f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)(FHS_FAST_IP >> 32), 0, 1);
   f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
   for (unsigned i = 0; i < NN; i++) { f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NRS[i], 0, 1); f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF); }
   f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   struct sock_fprog prog = {k, f};
   int lfd = syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &prog);
-  if (lfd < 0) { setenv("FHS_SUP", "1", 1); }   // fallback: run unsupervised
-  else { send_fd(sp[0], lfd); close(lfd); setenv("FHS_SUP", "1", 1); }
+  if (lfd < 0) { unsetenv("FHS_FAST_ABI"); setenv("FHS_SUP", "1", 1); }   // fallback: run unsupervised
+  else { int sent = send_fd(sp[0], lfd); close(lfd); setenv("FHS_SUP", "1", 1);
+    if (sent > 0) setenv("FHS_FAST_ABI", FHS_FAST_ABI_VALUE, 1); else unsetenv("FHS_FAST_ABI"); }
   close(sp[0]);
   char* const* av = argv + 1; syscall(SYS_execve, argv[1], av, environ); perror("fhs-run exec"); return 127;
 }

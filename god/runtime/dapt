@@ -1,11 +1,55 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # dapt: apt for an isolated Debian (arm64) tree in $PREFIX/debian (does not touch Termux's own dpkg/apt).
 #   dapt init | update | install PKG | remove PKG | search X | show X | list --installed | dpkg ARGS | dpkg-query ARGS | fixlinks
-P=${PREFIX:-/data/data/com.termux/files/usr}; D=${DAPT_ROOT:-$P/debian}
+P=${PREFIX:-/data/data/com.termux/files/usr}
+D=${DAPT_ROOT:-$P/debian}
+usage() {
+  echo "Usage: dapt [--root DIR|--root=DIR] COMMAND [ARGS...]" >&2
+  echo "       dapt install PKG --fix     (repair dependencies in the selected Debian root)" >&2
+  echo "       dapt init|update|remove PKG|search TERM|show PKG|list --installed|fix" >&2
+  echo "Debian root: $D" >&2
+  echo "--root selects a separate Debian tree; initialize it with 'dapt --root DIR init' first." >&2
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --root)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 2; }
+      D=$2; shift 2 ;;
+    --root=*)
+      D=${1#--root=}; [ -n "$D" ] || { usage; exit 2; }; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) break ;;
+  esac
+done
+[ -n "$D" ] || { usage; exit 2; }
+FIX_AFTER=0
+args=()
+for arg in "$@"; do
+  if [ "$arg" = "--fix" ]; then FIX_AFTER=1; else args+=("$arg"); fi
+done
+set -- "${args[@]}"
+if [ "$FIX_AFTER" = 1 ] && [ "${1:-}" != install ]; then
+  echo "dapt: --fix is supported with 'install': dapt install PKG --fix" >&2
+  exit 2
+fi
 gen() { sed "s#@P@#$P#g; s#@D@#$D#g"; }
 
-# the helper scripts in the Debian tree are regenerated on every run so fork updates reach existing installs
+# Bump when wrapper templates change; include both roots so relocated trees refresh.
+WRAPPER_VERSION=4
+WRAPPER_TOOLS=(dpkg fixlinks update-alternatives dpkg-maintscript-helper mkdir chown chgrp
+  update-rc.d invoke-rc.d deb-systemd-helper deb-systemd-invoke systemctl systemd-tmpfiles
+  systemd-sysusers systemd-machine-id-setup policy-rc.d add-shell remove-shell dpkg-statoverride
+  pam-auth-update adduser addgroup useradd groupadd usermod)
+wrappers_current() {
+  local version t
+  [ -r "$D/.ddpkg-bin/.version" ] || return 1
+  IFS= read -r version < "$D/.ddpkg-bin/.version"
+  [ "$version" = "$WRAPPER_VERSION|$P|$D" ] || return 1
+  for t in "${WRAPPER_TOOLS[@]}"; do [ -x "$D/.ddpkg-bin/$t" ] || return 1; done
+}
+
 wrappers() {
+  wrappers_current && return 0
   mkdir -p "$D/.ddpkg-bin"
   gen > "$D/.ddpkg-bin/dpkg" <<'E2'
 #!@P@/bin/bash
@@ -13,15 +57,21 @@ wrappers() {
 D=@D@
 export FHS_DEBIAN=1 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 R=""; [ -x @P@/glibc/shim/fhs-run ] && R=@P@/glibc/shim/fhs-run
-PATH="$D/.ddpkg-bin:$PATH:$D/usr/sbin:$D/sbin" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends --log=$D/var/log/dpkg.log "$@"
-rc=$?; "$D/.ddpkg-bin/fixlinks"; exit $rc
+PATH="$D/.ddpkg-bin:$D/usr/bin:$D/bin:$PATH:$D/usr/sbin:$D/sbin" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends --log=$D/var/log/dpkg.log "$@"
+rc=$?
+# Queries do not change links. Unknown actions retain the full repair pass.
+case "$1" in
+  -s|--status|-l|--list|-L|--listfiles|-S|--search|-C|--audit|--get-selections|--print-architecture|--print-foreign-architectures|--version|--help) ;;
+  *) "$D/.ddpkg-bin/fixlinks" ;;
+esac
+exit $rc
 E2
   gen > "$D/.ddpkg-bin/fixlinks" <<'E2'
 #!@P@/bin/bash
 # absolute symlinks inside the Debian tree point at host paths; the kernel resolves them itself, so re-point them into the tree
 D=@D@
-find "$D" -xdev -type l 2>/dev/null | while read -r l; do
-  t=$(readlink "$l"); case "$t" in
+find "$D" -xdev -type l -printf '%p\0%l\0' 2>/dev/null | while IFS= read -r -d '' l && IFS= read -r -d '' t; do
+  case "$t" in
     "$D"/*|/data/*|/proc/*|/sys/*|/dev/*|/system/*) continue ;;
     /*) if [ -e "$D$t" ] || [ -L "$D$t" ]; then ln -sfn "$D$t" "$l"; fi ;;
   esac
@@ -47,19 +97,63 @@ E2
   # init-system / account helpers that have nothing to do in an app sandbox: no-ops so maintainer scripts finish
   for t in update-rc.d invoke-rc.d deb-systemd-helper deb-systemd-invoke systemctl systemd-tmpfiles systemd-sysusers systemd-machine-id-setup policy-rc.d add-shell remove-shell dpkg-statoverride pam-auth-update adduser addgroup useradd groupadd usermod; do
     printf '#!@P@/bin/sh\nexit 0\n' | gen > "$D/.ddpkg-bin/$t"; done
-  chmod +x "$D/.ddpkg-bin/"*
+  chmod +x "$D/.ddpkg-bin/"* || return
+  printf '%s\n' "$WRAPPER_VERSION|$P|$D" > "$D/.ddpkg-bin/.version"
 }
 
-# regenerate the caches Debian maintainer scripts would have built with host tools (they pick up Termux's bionic tools first, which is wrong for this tree)
+# regenerate the caches Debian maintainer scripts would have built with host tools (they pick up Termux's bionic tools first, which is wrong for this tree).
+# A cache is rebuilt only when the files it is built from changed, or something else rewrote the cache file, since our last run
+# (fingerprints in $D/var/cache/dapt-refresh). "dapt refresh" rebuilds everything.
+RC_FMT='%p %s %T@ %C@\n'
+rc_state() {   # the files a cache is built from plus the cache file(s): name, size, mtime, ctime. Directories are left out: writing a cache touches them.
+  case "$1" in
+    pixbuf)  find "$D/usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0" -mindepth 2 ! -type d \( -path '*/loaders/*' -o -name loaders.cache \) -printf "$RC_FMT" ;;
+    schemas) find "$D/usr/share/glib-2.0/schemas" -mindepth 1 ! -type d -printf "$RC_FMT" ;;
+    mime)    find "$D/usr/share/mime/packages" "$D/usr/share/mime/mime.cache" ! -type d -printf "$RC_FMT" ;;
+    icons)   find "$D/usr/share/icons" -mindepth 2 ! -type d -printf "$RC_FMT" ;;
+  esac 2>/dev/null
+}
+rc_inputs() {  # the same listing without the cache files
+  local l
+  while IFS= read -r l; do
+    case "$l" in */loaders.cache\ *|*/gschemas.compiled\ *|*/mime.cache\ *|*/icon-theme.cache\ *) ;; *) printf '%s\n' "$l" ;; esac
+  done <<< "$1"
+}
 refresh_caches() {
   [ -x "$P/glibc/shim/fhs-run" ] || return 0
-  FHS_DEBIAN=1 "$P/glibc/shim/fhs-run" "$P/bin/sh" -c '
-    for t in /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders; do [ -x $t ] && $t --update-cache >/dev/null 2>&1; done
-    [ -x /usr/bin/glib-compile-schemas ] && /usr/bin/glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1
-    [ -x /usr/bin/update-mime-database ] && /usr/bin/update-mime-database /usr/share/mime >/dev/null 2>&1
-    if [ -x /usr/bin/gtk-update-icon-cache ]; then for d in /usr/share/icons/*/; do [ -f "${d}index.theme" ] && /usr/bin/gtk-update-icon-cache -qf "$d" >/dev/null 2>&1; done; fi
-    [ -x /usr/bin/fc-cache ] && /usr/bin/fc-cache -s >/dev/null 2>&1
-    true' 2>/dev/null
+  local force=$1 dir="$D/var/cache/dapt-refresh" n old now built script='' todo=()
+  local -A before
+  [ "$(find "$D" -maxdepth 0 -printf ok 2>/dev/null)" = ok ] || force=1   # find without -printf: no fingerprints, rebuild everything as before
+  for n in pixbuf schemas mime icons; do
+    before[$n]=$(rc_state $n)
+    if [ -z "$force" ]; then
+      [ -n "${before[$n]}" ] || continue   # neither inputs nor a cache
+      old=; [ -r "$dir/$n" ] && old=$(< "$dir/$n")
+      [ "$old" != "${before[$n]}" ] || continue
+    fi
+    todo+=($n)
+    case $n in   # each command prints its name when the cache was rebuilt
+      pixbuf)  script+='t=/usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders; [ -x $t ] && $t --update-cache >/dev/null 2>&1 && echo pixbuf
+' ;;
+      schemas) script+='[ -x /usr/bin/glib-compile-schemas ] && /usr/bin/glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 && echo schemas
+' ;;
+      # update-mime-database syncs each of its ~900 output files to disk; a cache that can be rebuilt does not need that
+      mime)    script+='[ -x /usr/bin/update-mime-database ] && PKGSYSTEM_ENABLE_FSYNC=0 /usr/bin/update-mime-database /usr/share/mime >/dev/null 2>&1 && echo mime
+' ;;
+      icons)   script+='if [ -x /usr/bin/gtk-update-icon-cache ]; then ok=1; for d in /usr/share/icons/*/; do [ -f "${d}index.theme" ] || continue; /usr/bin/gtk-update-icon-cache -qf "$d" >/dev/null 2>&1 || ok=; done; [ -n "$ok" ] && echo icons; fi
+' ;;
+    esac
+  done
+  script+='[ -x /usr/bin/fc-cache ] && /usr/bin/fc-cache -s >/dev/null 2>&1; true'   # checks its own directories, cheap when nothing changed
+  built=$(FHS_DEBIAN=1 "$P/glibc/shim/fhs-run" "$P/bin/sh" -c "$script" 2>/dev/null)
+  for n in "${todo[@]}"; do
+    case $'\n'"$built"$'\n' in *$'\n'"$n"$'\n'*) ;; *) continue ;; esac   # not rebuilt (tool missing or failed): try again next time
+    now=$(rc_state $n)
+    # inputs that changed while the tool ran are not in the cache: leave the old fingerprint so the next run rebuilds
+    [ "$(rc_inputs "$now")" = "$(rc_inputs "${before[$n]}")" ] || continue
+    [ -d "$dir" ] || mkdir -p "$dir" || return 0
+    printf '%s\n' "$now" > "$dir/$n"
+  done
 }
 
 init() {
@@ -129,7 +223,7 @@ E2
 export APT_CONFIG=$D/etc/apt/apt.conf
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true TZ=${TZ:-UTC}   # maintainer scripts must never prompt
 [ -d "$D/.ddpkg-bin" ] && wrappers
-case "$(basename "$0")" in
+case "${0##*/}" in
   dapt-get)   exec $P/bin/apt-get "$@" ;;
   dapt-cache) exec $P/bin/apt-cache "$@" ;;
 esac
@@ -138,9 +232,22 @@ case "$1" in
   dpkg)       shift; exec "$D/.ddpkg-bin/dpkg" "$@" ;;
   dpkg-query) shift; exec $P/bin/dpkg-query --admindir=$D/var/lib/dpkg "$@" ;;
   fixlinks)   exec "$D/.ddpkg-bin/fixlinks" ;;
-  refresh)    refresh_caches; exit 0 ;;
+  refresh)    refresh_caches force; exit $? ;;
+  fix)
+    [ -f "$APT_CONFIG" ] || { echo "dapt: tree is not initialised; run 'dapt init' first" >&2; exit 1; }
+    echo "dapt: repairing Debian packages in $D"
+    "$P/bin/apt-get" --fix-broken install -y || exit $?
+    "$D/.ddpkg-bin/dpkg" --configure -a || exit $?
+    refresh_caches
+    exit $? ;;
 esac
 [ -f "$APT_CONFIG" ] || { echo "dapt: Debian tree is not initialised; running 'dapt init'" >&2; init || exit 1; }
-$P/bin/apt "$@"; rc=$?
+if [ "$FIX_AFTER" = 1 ]; then
+  echo "dapt: --fix: resolving the package and repairing dependencies in $D"
+  "$P/bin/apt-get" --fix-broken install -y "${@:2}"
+  rc=$?
+else
+  "$P/bin/apt" "$@"; rc=$?
+fi
 case "$1" in install|reinstall|upgrade|full-upgrade|dist-upgrade|remove|purge|autoremove) refresh_caches ;; esac
-exit $rc
+exit "$rc"
