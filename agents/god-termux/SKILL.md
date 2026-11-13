@@ -38,6 +38,24 @@ description: "Управление окружением god-termux (форк Ter
 5. Композитор поддерживает только программный вывод (`wl_shm`): без dmabuf, субповерхности не отрисовываются, клиентам нужен `--disable-gpu`. Окно композитора открывает `wlrun --open` (после согласия пользователя).
 6. Долгие GUI-процессы запускай через `run_in_background`, пиши лог в файл, а ожидание делай циклом `until`, не `sleep`.
 
+## Запуск среды (рабочего стола)
+
+Все варианты открывают окно на телефоне: сначала спроси пользователя, какой нужен.
+
+**Wayland, основной путь (`xfce-wl`).** XFCE из Debian-дерева во вложенном `labwc` внутри окна `wlcomp`.
+1. Один раз поставь пакеты (проверка: есть ли `$PREFIX/debian/usr/bin/labwc`):
+   `dapt update && dapt install --no-install-recommends labwc xfce4-panel xfdesktop4 xfce4-terminal thunar xfce4-whiskermenu-plugin xfce4-settings adwaita-icon-theme fonts-dejavu-core dbus dbus-daemon xfce4-session`
+2. `xfce-wl` запускает сессию. Скрипт сам вызывает `wlrun --open` (открывает `com.termux/com.termux.mod.WlActivity`), ждёт сокет `wayland-0`, поднимает `labwc` через `fhs-run ... dbus-run-session -- labwc` и ждёт сокет `wayland-1` (до 15 с). В автозапуске `labwc` лежат `xfsettingsd`, `xfdesktop`, `xfce4-panel` (файл `~/.config/god-xfce/labwc/autostart`).
+3. Остановить: `xfce-wl stop`. Лог: `$PREFIX/tmp/xfce-wl.log`. Если пишет «labwc did not start», читай этот лог.
+4. Сеансу нужен включённый мод `wlcomp` (Настройки Termux → Моды); без него `wlrun` пишет «compositor did not start».
+5. Приложения внутри сессии: `WAYLAND_DISPLAY=wayland-1`, остальное окружение как в разделе выше. Для Chromium: `WLCHROMIUM_DISPLAY=wayland-1 wlchromium` (два слоя копирования кадра, медленнее, чем напрямую).
+
+**Wayland без рабочего стола (`wlrun`, `wlchromium`).** Одно приложение прямо на `wayland-0`, без панели и управления окнами: `wlrun xfce4-terminal`, `wlrun gtk3-widget-factory`, `wlchromium URL`. Это быстрее, чем `xfce-wl`. `wlrun --open` только открывает окно композитора. Окно закрывается кнопкой «назад».
+
+**Termux:X11 (устаревший путь, не по умолчанию).** `desk` (XFCE с virgl, `desk stop`), `chromen` (Chrome с virgl), `go` (оба сразу, `go stop`). Логи `~/.desk.log`, `~/.chromen.log`. Пользователь отказался от X11: предлагай этот путь только по прямой просьбе.
+
+**После запуска проверь результат:** сокет живой (`python3 -c` с `socket.connect` по `$PREFIX/tmp/wayland-1`, как в функции `alive` у `xfce-wl`), в логе нет ошибок, на скриншоте (`mcp__god-ui__screenshot`) окно композитора, а не терминал. Не сообщай «запущено» без этого. Не проверено на этом телефоне: полный запуск `xfce-wl` и работа `claude-desktop` внутри него.
+
 ## dapt: пакеты
 
 - `dapt update`, `dapt install ПАКЕТ`, `dapt install ПАКЕТ --fix`, `dapt dpkg ...`, `dapt dpkg -l`, `dapt list --installed`, `dapt fix`.
