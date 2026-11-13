@@ -1,0 +1,16 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# wlclaude: Claude Desktop (Debian-дерево dapt) как Wayland-клиент композитора god-termux (wlcomp), по образцу wlchromium.
+# Дисплей: $WAYLAND_DISPLAY, если он задан и сокет есть (сессия xfce-wl даёт wayland-1), иначе wayland-0 (wlcomp напрямую).
+# Лог: $PREFIX/tmp/claude-desktop.log
+P=${PREFIX:-/data/data/com.termux/files/usr}; F=$P/glibc/shim/fhs-run; LOG=$P/tmp/claude-desktop.log
+export XDG_RUNTIME_DIR=$P/tmp
+D=${WAYLAND_DISPLAY:-wayland-0}; [ -S "$XDG_RUNTIME_DIR/$D" ] || D=wayland-0
+if [ "$D" = wayland-0 ]; then WAYLAND_DISPLAY=wayland-0 wlrun --open >>"$LOG" 2>&1 || { echo "wlclaude: композитор wlcomp не отвечает (см. $LOG)" >&2; exit 1; }; fi
+export WAYLAND_DISPLAY=$D FHS_DEBIAN=1 XDG_DATA_DIRS=/usr/share XDG_CONFIG_DIRS=/etc/xdg NO_AT_BRIDGE=1
+export XDG_CONFIG_HOME=$HOME/.config/god-claude XDG_CACHE_HOME=$HOME/.cache/god-claude
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+# реальный бинарь, не симлинк /usr/bin/claude-desktop: иначе Chromium не найдёт icudtl.dat
+export CLAUDE_BIN=$P/debian/usr/lib/claude-desktop/claude-desktop
+export CL_FLAGS="--ozone-platform=wayland --no-sandbox --disable-dev-shm-usage --disable-gpu --password-store=basic --enable-logging=stderr"
+echo "=== $(date '+%F %T') wlclaude: display=$D" >>"$LOG"
+exec "$F" "$P/bin/sh" -c 'exec dbus-run-session -- $CLAUDE_BIN $CL_FLAGS "$@"' sh "$@" >>"$LOG" 2>&1

@@ -303,6 +303,33 @@ int mkdir(const char* p, mode_t m) { static int (*r)(const char*, mode_t); if (!
 int unlink(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "unlink"); P(p); fhs_cache_clear(); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, 0, 0, 0); return r(p); }
 int rmdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "rmdir"); P(p); fhs_cache_clear(); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, AT_REMOVEDIR, 0, 0); return r(p); }
 void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "dlopen"); if (!p) return r(p, fl); P(p); return r(p, fl); }
+
+// ---- SIGSYS -> ENOSYS. Android's app seccomp filter answers syscalls it does not allow (openat2 = 437 for Electron/Node, maybe others) with
+// SIGSYS, which kills the process; a glibc program expects ENOSYS and falls back (openat). The handler resumes after the blocked svc with x0 = -ENOSYS.
+// Applications that install their own SIGSYS handler (Chromium's sandbox, Crashpad treats SIGSYS as a crash) would replace ours: sigaction/signal for SIGSYS
+// are answered without installing anything. FHS_SIGSYS=0 turns all of this off, FHS_SIGSYS_LOG=1 prints "fhs: SIGSYS syscall N -> ENOSYS" to stderr.
+#include <ucontext.h>
+static int fhs_sigsys_on;
+static void fhs_sigsys_handler(int sig, siginfo_t* si, void* uc) {
+  (void)sig; if (si->si_code != 1 /* SYS_SECCOMP */) return;   // kill(SIGSYS) from a process: nothing to emulate
+  if (getenv("FHS_SIGSYS_LOG")) { char m[64] = "fhs: SIGSYS syscall "; size_t n = strlen(m); char d[12]; int k = 0; unsigned v = (unsigned)si->si_syscall;
+    do { d[k++] = '0' + v % 10; v /= 10; } while (v); while (k) m[n++] = d[--k]; memcpy(m + n, " -> ENOSYS\n", 11); n += 11; int e = errno; if (write(2, m, n) < 0) {} errno = e; }
+  ((ucontext_t*)uc)->uc_mcontext.regs[0] = (unsigned long long)(long long)-ENOSYS;
+}
+__attribute__((constructor)) static void fhs_sigsys_init(void) {
+  const char* off = getenv("FHS_SIGSYS"); if (off && !strcmp(off, "0")) return;
+  static int (*real)(int, const struct sigaction*, struct sigaction*); if (!real) real = dlsym(RTLD_NEXT, "sigaction"); if (!real) return;
+  struct sigaction sa; memset(&sa, 0, sizeof sa); sa.sa_sigaction = fhs_sigsys_handler; sa.sa_flags = SA_SIGINFO | SA_NODEFER; sigemptyset(&sa.sa_mask);
+  if (real(SIGSYS, &sa, 0) == 0) fhs_sigsys_on = 1;
+}
+int sigaction(int sig, const struct sigaction* act, struct sigaction* old) {
+  static int (*r)(int, const struct sigaction*, struct sigaction*); if (!r) r = dlsym(RTLD_NEXT, "sigaction");
+  if (sig == SIGSYS && fhs_sigsys_on && act) { if (old) r(sig, 0, old); return 0; }   // keep our handler; report success to the program
+  return r(sig, act, old); }
+sighandler_t signal(int sig, sighandler_t h) {
+  static sighandler_t (*r)(int, sighandler_t); if (!r) r = dlsym(RTLD_NEXT, "signal");
+  if (sig == SIGSYS && fhs_sigsys_on) return SIG_DFL;
+  return r(sig, h); }
 #endif
 
 #ifndef GLIBC_BUILD
