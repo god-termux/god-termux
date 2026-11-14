@@ -73,3 +73,8 @@
 - Пропуск `fixlinks` для `--configure/--remove/--purge`: postinst-скрипты создают симлинки (`ln -s`, `update-alternatives`), которые нужно перенаправлять.
 
 **Не сделано (реальный пробел, нужен отдельный заход):** в glibc-сборке `fhs.c` нет `mkdirat`, `unlinkat`, `rename*`, `symlink*`, `link*`, `chown*`, `utimensat` (есть в `fhs-bionic-io.h`), `chmod` не использует `FHS_TAGGED`. Без `fhs-run` такие вызовы идут в ядро без перевода пути; проверено чтением кода, не воспроизводилось. См. пункт плана «обёртки …» выше.
+
+### Выравнивание glibc-сборки (2026-11-14)
+
+**Сделано:** в `fhs.c` (GLIBC_BUILD) добавлены `mkdirat`, `unlinkat`, `rename`, `renameat`, `renameat2`, `symlink`, `symlinkat`, `link`, `linkat`, `chown`, `lchown`, `fchownat`, `utimensat`, `utimes`; `chmod`/`fchmodat` (без флагов) идут через `FHS_SYS5`. Сырые системные вызовы (трамплин под `fhs-run`, иначе `syscall()`), у `symlink` цель не переводится. Сброс кэша через `PW`/новый `PW2` (по исходным путям). Тест `god/tests/fhs/fsops.py` (+`fsops.c`): glibc-программа с вкомпилированным шимом создаёт, переименовывает, линкует, меняет права и время для `/tmp/...`; на старом `fhs.c` падает на `mkdirat`, на новом проходит. Хардлинки на Android запрещены приложениям (SELinux): тест принимает `EACCES`/`EPERM`.
+**Не сделано:** `futimesat`/`utime`, `truncate`, `mkfifo`/`mknod`, `setxattr`-семейство, `rename` с флагами внутри libc-внутренних вызовов (glibc не вызывает наши обёртки для собственных внутренних операций).

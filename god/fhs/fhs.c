@@ -281,8 +281,8 @@ int bind(int fd, const struct sockaddr* a, socklen_t l) { static int (*r)(int, c
   struct sockaddr_un o; socklen_t ol; if (fhs_sockfix(a, l, &o, &ol, 1)) return r(fd, (const struct sockaddr*)&o, ol); return r(fd, a, l); }
 int connect(int fd, const struct sockaddr* a, socklen_t l) { static int (*r)(int, const struct sockaddr*, socklen_t); if (!r) r = dlsym(RTLD_NEXT, "connect");
   struct sockaddr_un o; socklen_t ol; if (fhs_sockfix(a, l, &o, &ol, 0)) return r(fd, (const struct sockaddr*)&o, ol); return r(fd, a, l); }
-int chmod(const char* p, mode_t m) { static int (*r)(const char*, mode_t); if (!r) r = dlsym(RTLD_NEXT, "chmod"); P(p); return r(p, m); }
-int fchmodat(int d, const char* p, mode_t m, int f) { static int (*r)(int, const char*, mode_t, int); if (!r) r = dlsym(RTLD_NEXT, "fchmodat"); P(p); return r(d, p, m, f); }
+int chmod(const char* p, mode_t m) { P(p); return FHS_SYS5(SYS_fchmodat, AT_FDCWD, p, m, 0, 0); }
+int fchmodat(int d, const char* p, mode_t m, int f) { static int (*r)(int, const char*, mode_t, int); if (!r) r = dlsym(RTLD_NEXT, "fchmodat"); P(p); if (!f) return FHS_SYS5(SYS_fchmodat, d, p, m, 0, 0); return r(d, p, m, f); }   // AT_SYMLINK_NOFOLLOW is emulated inside libc
 static ssize_t fhs_selfexe(const char* p, char* b, size_t n) {   // readlink("/proc/self/exe") for processes started through the loader
   if (!p || strcmp(p, "/proc/self/exe")) return -2;
   const char* fe = getenv("FHS_EXE"); if (!fe || !fe[0]) return -2;
@@ -328,6 +328,28 @@ int chdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_
 int mkdir(const char* p, mode_t m) { static int (*r)(const char*, mode_t); if (!r) r = dlsym(RTLD_NEXT, "mkdir"); PW(p, 1); if (FAST) return FHS_TAGGED(SYS_mkdirat, AT_FDCWD, p, m, 0, 0); return r(p, m); }
 int unlink(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "unlink"); PW(p, 1); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, 0, 0, 0); return r(p); }
 int rmdir(const char* p) { static int (*r)(const char*); if (!r) r = dlsym(RTLD_NEXT, "rmdir"); PW(p, 1); if (FAST) return FHS_TAGGED(SYS_unlinkat, AT_FDCWD, p, AT_REMOVEDIR, 0, 0); return r(p); }
+// Creating and modifying calls that carry a path. Without these a glibc program under no supervisor handed /tmp/a, /etc/x ... to the kernel as they were,
+// and under fhs-run each of them cost a supervisor round trip. Raw syscalls (FHS_SYS5: trampoline under a supervisor, plain syscall() otherwise): glibc's own
+// rename/symlink/... are plain wrappers around exactly these. PW2 decides on the original paths whether the lookup cache has to be dropped.
+#define PW2(o, n) char _b1[PATH_MAX], _b2[PATH_MAX]; int _w = fhs_dirty(o) || fhs_dirty(n); o = fmap(o, _b1); n = fmap(n, _b2); if (_w) fhs_cache_clear()
+int mkdirat(int d, const char* p, mode_t m) { PW(p, 1); return FHS_SYS5(SYS_mkdirat, d, p, m, 0, 0); }
+int unlinkat(int d, const char* p, int f) { PW(p, 1); return FHS_SYS5(SYS_unlinkat, d, p, f, 0, 0); }
+int rename(const char* o, const char* n) { PW2(o, n); return FHS_SYS5(SYS_renameat2, AT_FDCWD, o, AT_FDCWD, n, 0); }
+int renameat(int od, const char* o, int nd, const char* n) { PW2(o, n); return FHS_SYS5(SYS_renameat2, od, o, nd, n, 0); }
+int renameat2(int od, const char* o, int nd, const char* n, unsigned f) { PW2(o, n); return FHS_SYS5(SYS_renameat2, od, o, nd, n, f); }
+int symlink(const char* t, const char* n) { PW(n, 1); return FHS_SYS5(SYS_symlinkat, t, AT_FDCWD, n, 0, 0); }   // the target is stored verbatim
+int symlinkat(const char* t, int nd, const char* n) { PW(n, 1); return FHS_SYS5(SYS_symlinkat, t, nd, n, 0, 0); }
+int link(const char* o, const char* n) { PW2(o, n); return FHS_SYS5(SYS_linkat, AT_FDCWD, o, AT_FDCWD, n, 0); }
+int linkat(int od, const char* o, int nd, const char* n, int f) { PW2(o, n); return FHS_SYS5(SYS_linkat, od, o, nd, n, f); }
+int chown(const char* p, uid_t u, gid_t g) { P(p); return FHS_SYS5(SYS_fchownat, AT_FDCWD, p, u, g, 0); }
+int lchown(const char* p, uid_t u, gid_t g) { P(p); return FHS_SYS5(SYS_fchownat, AT_FDCWD, p, u, g, AT_SYMLINK_NOFOLLOW); }
+int fchownat(int d, const char* p, uid_t u, gid_t g, int f) { P(p); return FHS_SYS5(SYS_fchownat, d, p, u, g, f); }
+int utimensat(int d, const char* p, const struct timespec ts[2], int f) { if (p) { P(p); return FHS_SYS5(SYS_utimensat, d, p, ts, f, 0); } return FHS_SYS5(SYS_utimensat, d, p, ts, f, 0); }   // p == NULL: futimens()
+int utimes(const char* p, const struct timeval tv[2]) {
+  struct timespec ts[2];
+  if (tv) for (int i = 0; i < 2; i++) { if (tv[i].tv_usec < 0 || tv[i].tv_usec >= 1000000) { errno = EINVAL; return -1; } ts[i].tv_sec = tv[i].tv_sec; ts[i].tv_nsec = tv[i].tv_usec * 1000; }
+  P(p); return FHS_SYS5(SYS_utimensat, AT_FDCWD, p, tv ? ts : NULL, 0, 0);
+}
 void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "dlopen"); if (!p) return r(p, fl); P(p); return r(p, fl); }
 #endif
 
