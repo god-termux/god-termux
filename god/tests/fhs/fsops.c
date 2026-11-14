@@ -78,5 +78,21 @@ int bmain(int argc, char** argv) {
   assert(stat(T "/d", &st) == 0); OK(rename(T "/d", T "/e")); assert(stat(T "/d", &st) == -1 && errno == ENOENT); assert(stat(T "/e", &st) == 0);
   OK(unlinkat(AT_FDCWD, T "/e", 0)); OK(unlinkat(AT_FDCWD, T "/sub", AT_REMOVEDIR)); assert(!exists(R "/e") && !exists(R "/sub"));
   system("rm -rf " R "*");
+  // read-only lookups across the trees: names stay in FHS form, content comes from whichever tree has the file
+  { glob_t g = {0}; OK(glob("/usr/bin/l[s]", 0, 0, &g)); assert(g.gl_pathc == 1 && !strcmp(g.gl_pathv[0], "/usr/bin/ls")); globfree(&g);          // Termux tree
+    OK(glob("/usr/lib/libc.so.[6]", 0, 0, &g)); assert(g.gl_pathc == 1 && !strcmp(g.gl_pathv[0], "/usr/lib/libc.so.6")); globfree(&g);          // glibc tree
+    OK(glob("/etc/prof*", 0, 0, &g)); assert(g.gl_pathc >= 1 && !strncmp(g.gl_pathv[0], "/etc/prof", 9)); globfree(&g);
+    assert(glob("/usr/bin/no-such-file-*", 0, 0, &g) == GLOB_NOMATCH); globfree(&g);
+    OK(glob("/usr/bin/l[s]", GLOB_MARK, 0, &g)); globfree(&g);   // flags other than ALTDIRFUNC pass through
+    OK(glob("/usr/b[i]n", GLOB_ONLYDIR, 0, &g)); assert(g.gl_pathc == 1); globfree(&g); }
+  { struct dirent** l = 0; int c = scandir("/usr/bin", &l, 0, alphasort); assert(c > 10); int hit = 0; while (c--) { if (!strcmp(l[c]->d_name, "ls")) hit = 1; free(l[c]); } free(l); assert(hit); }
+  { int c = scandir("/usr/lib", &(struct dirent**){0}, 0, 0); assert(c >= 0); }
+  { char rb[PATH_MAX]; assert(realpath("/usr/bin/ls", rb) && !strncmp(rb, PFX "/", sizeof PFX));
+    errno = 0; assert(!realpath("/usr/bin/definitely-missing", rb) && errno == ENOENT);
+    assert(realpath("/usr/lib/libc.so.6", rb) && strstr(rb, "libc")); }
+  { ftw_seen = 0; OK(nftw("/etc", ncb, 8, FTW_PHYS)); assert(ftw_seen > 3); }
+  errno = 0; assert(nftw("/usr/bin/definitely-missing", ncb, 4, 0) == -1 && errno == ENOENT);
+  // creating inside a mapped directory that already exists in the Termux tree
+  { FILE* f = fopen("/etc/fhs-fsops-probe", "w"); if (f) { fclose(f); assert(exists(PFX "/etc/fhs-fsops-probe")); OK(remove("/etc/fhs-fsops-probe")); } }
   puts("OK"); return 0;
 }
