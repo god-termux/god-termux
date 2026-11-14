@@ -67,6 +67,49 @@ adb_state() { timeout 5 adb -s "$1" get-state 2>/dev/null; }
 # a connection can be listed as "device" for a while after wireless debugging went off (or the network changed): require a real round trip
 ep_alive() { [ "$(timeout 4 adb -s "$1" shell echo ok 2>/dev/null)" = ok ] || { adb disconnect "$1" >/dev/null 2>&1; return 1; }; }
 
+# scan_ep: the Wireless debugging port changes on every restart and the IP changes with the network, so the saved endpoint goes stale.
+# Probe this phone's own addresses for listening ports (adb has no mDNS here), try `adb connect` on each, publish the one that answers.
+# Rate-limited (a failed lookup must not cost every dsu call a scan). 0 = connected (EP set).
+SCAN_PY='import socket,sys,select,errno
+ip=sys.argv[1]; out=[]
+for b in range(32768,61000,1000):
+    left={}
+    for p in range(b,min(b+1000,61000)):
+        s=socket.socket(); s.setblocking(False)
+        if s.connect_ex((ip,p)) in (0,errno.EINPROGRESS): left[s]=p
+        else: s.close()
+    while left:
+        _,w,_=select.select([],list(left),[],0.5)
+        if not w: break
+        for s in w:
+            if s.getsockopt(socket.SOL_SOCKET,socket.SO_ERROR)==0: out.append(left[s])
+            s.close(); del left[s]
+    for s in left: s.close()
+print(*out)'
+open_ports() { # open_ports IP: listening ports in the ephemeral range (nmap: ~3 s; plain python: ~30 s)
+  if command -v nmap >/dev/null 2>&1; then
+    timeout 30 nmap -Pn -n -p 32768-61000 --open -T4 --min-rate 3000 "$1" 2>/dev/null | awk -F/ '/^[0-9]+\/tcp/{print $1}'
+  elif command -v python3 >/dev/null 2>&1; then timeout 90 python3 -I -c "$SCAN_PY" "$1" 2>/dev/null | tr ' ' '\n'
+  fi
+}
+scan_ep() {
+  have_adb || return 1
+  local now last ips ip port; now=$(date +%s); last=$(cat "$T/dsu-scan-ts" 2>/dev/null || echo 0)
+  [ $((now-last)) -ge 20 ] || return 1
+  mkdir -p "$T" 2>/dev/null; echo "$now" > "$T/dsu-scan-ts"
+  ips=$(ifconfig 2>/dev/null | awk '/inet /{print $2}' | grep -v '^127\.')
+  for ip in $ips; do
+    for port in $(open_ports "$ip"); do
+      timeout 5 adb connect "$ip:$port" >/dev/null 2>&1
+      if [ "$(adb_state "$ip:$port")" = device ] && ep_alive "$ip:$port"; then
+        EP=$ip:$port; EP_NOTE="порт найден сканированием"; echo "$EP" > "$T/adb-connect-port"; dbg "scan: $EP"; return 0
+      fi
+      adb disconnect "$ip:$port" >/dev/null 2>&1
+    done
+  done
+  return 1
+}
+
 # find_ep: sets EP (and EP_NOTE). return 0 ok, 1 none, 2 several devices
 find_ep() {
   EP=""; EP_NOTE=""
@@ -109,6 +152,7 @@ find_ep() {
     timeout 5 adb connect "$f" >/dev/null 2>&1
     if [ "$(adb_state "$f")" = device ] && ep_alive "$f"; then EP=$f; return 0; fi
   fi
+  scan_ep && return 0
   return 1
 }
 
