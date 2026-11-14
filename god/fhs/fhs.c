@@ -256,8 +256,12 @@ int openat(int d, const char* p, int fl, ...) { va_list ap; va_start(ap, fl); mo
 int openat64(int d, const char* p, int fl, ...) { va_list ap; va_start(ap, fl); mode_t m = va_arg(ap, mode_t); va_end(ap);
   static int (*r)(int, const char*, int, ...); if (!r) r = dlsym(RTLD_NEXT, "openat64"); PW(p, fl & O_CREAT);
   if (FAST) return FHS_TAGGED(SYS_openat, d, p, fl, OMODE(fl, m), 0); return r(d, p, fl, m); }
-FILE* fopen(const char* p, const char* m) { static FILE* (*r)(const char*, const char*); if (!r) r = dlsym(RTLD_NEXT, "fopen"); P(p); return r(p, m); }
-FILE* fopen64(const char* p, const char* m) { static FILE* (*r)(const char*, const char*); if (!r) r = dlsym(RTLD_NEXT, "fopen64"); P(p); return r(p, m); }
+FILE* fopen(const char* p, const char* m) { static FILE* (*r)(const char*, const char*); if (!r) r = dlsym(RTLD_NEXT, "fopen"); PW(p, m && (m[0] == 'w' || m[0] == 'a')); return r(p, m); }
+FILE* fopen64(const char* p, const char* m) { static FILE* (*r)(const char*, const char*); if (!r) r = dlsym(RTLD_NEXT, "fopen64"); PW(p, m && (m[0] == 'w' || m[0] == 'a')); return r(p, m); }
+FILE* freopen(const char* p, const char* m, FILE* s) { static FILE* (*r)(const char*, const char*, FILE*); if (!r) r = dlsym(RTLD_NEXT, "freopen"); if (p) { PW(p, m && (m[0] == 'w' || m[0] == 'a')); return r(p, m, s); } return r(p, m, s); }
+FILE* freopen64(const char* p, const char* m, FILE* s) { static FILE* (*r)(const char*, const char*, FILE*); if (!r) r = dlsym(RTLD_NEXT, "freopen64"); if (p) { PW(p, m && (m[0] == 'w' || m[0] == 'a')); return r(p, m, s); } return r(p, m, s); }
+int creat(const char* p, mode_t m) { return open(p, O_WRONLY | O_CREAT | O_TRUNC, m); }
+int creat64(const char* p, mode_t m) { return open64(p, O_WRONLY | O_CREAT | O_TRUNC, m); }
 int stat(const char* p, struct stat* s) { static int (*r)(const char*, struct stat*); if (!r) r = dlsym(RTLD_NEXT, "stat"); P(p); if (FAST) return FHS_TAGGED(SYS_newfstatat, AT_FDCWD, p, s, 0, 0); return r(p, s); }
 int lstat(const char* p, struct stat* s) { static int (*r)(const char*, struct stat*); if (!r) r = dlsym(RTLD_NEXT, "lstat"); P(p); if (FAST) return FHS_TAGGED(SYS_newfstatat, AT_FDCWD, p, s, AT_SYMLINK_NOFOLLOW, 0); return r(p, s); }
 int stat64(const char* p, struct stat64* s) { static int (*r)(const char*, struct stat64*); if (!r) r = dlsym(RTLD_NEXT, "stat64"); P(p); if (FAST) return FHS_TAGGED(SYS_newfstatat, AT_FDCWD, p, s, 0, 0); return r(p, s); }
@@ -381,6 +385,44 @@ ssize_t listxattr(const char* p, char* l, size_t n) { P(p); return FHS_SYS5(SYS_
 ssize_t llistxattr(const char* p, char* l, size_t n) { P(p); return FHS_SYS5(SYS_llistxattr, p, l, n, 0, 0); }
 int removexattr(const char* p, const char* nm) { P(p); return FHS_SYS5(SYS_removexattr, p, nm, 0, 0, 0); }
 int lremovexattr(const char* p, const char* nm) { P(p); return FHS_SYS5(SYS_lremovexattr, p, nm, 0, 0, 0); }
+// higher-level libc entry points whose internal calls bypass PLT hooks (realpath, remove, scandir*, ftw*/nftw*, glob*)
+int remove(const char* p) { return unlink(p) == 0 ? 0 : (errno == EISDIR ? rmdir(p) : -1); }
+char* realpath(const char* p, char* res) { static char* (*r)(const char*, char*); if (!r) r = dlsym(RTLD_NEXT, "realpath"); P(p); return r(p, res); }
+char* __realpath_chk(const char* p, char* res, size_t l) { if (l < PATH_MAX) { errno = ERANGE; return NULL; } return realpath(p, res); }
+int scandir(const char* p, struct dirent*** nl, int (*sel)(const struct dirent*), int (*cmp)(const struct dirent**, const struct dirent**)) {
+  static int (*r)(const char*, struct dirent***, int (*)(const struct dirent*), int (*)(const struct dirent**, const struct dirent**));
+  if (!r) r = dlsym(RTLD_NEXT, "scandir"); P(p); return r(p, nl, sel, cmp); }
+int scandir64(const char* p, struct dirent64*** nl, int (*sel)(const struct dirent64*), int (*cmp)(const struct dirent64**, const struct dirent64**)) {
+  static int (*r)(const char*, struct dirent64***, int (*)(const struct dirent64*), int (*)(const struct dirent64**, const struct dirent64**));
+  if (!r) r = dlsym(RTLD_NEXT, "scandir64"); P(p); return r(p, nl, sel, cmp); }
+int scandirat(int d, const char* p, struct dirent*** nl, int (*sel)(const struct dirent*), int (*cmp)(const struct dirent**, const struct dirent**)) {
+  static int (*r)(int, const char*, struct dirent***, int (*)(const struct dirent*), int (*)(const struct dirent**, const struct dirent**));
+  if (!r) r = dlsym(RTLD_NEXT, "scandirat"); P(p); return r(d, p, nl, sel, cmp); }
+int scandirat64(int d, const char* p, struct dirent64*** nl, int (*sel)(const struct dirent64*), int (*cmp)(const struct dirent64**, const struct dirent64**)) {
+  static int (*r)(int, const char*, struct dirent64***, int (*)(const struct dirent64*), int (*)(const struct dirent64**, const struct dirent64**));
+  if (!r) r = dlsym(RTLD_NEXT, "scandirat64"); P(p); return r(d, p, nl, sel, cmp); }
+#include <ftw.h>
+int ftw(const char* p, __ftw_func_t fn, int fd) { static int (*r)(const char*, __ftw_func_t, int); if (!r) r = dlsym(RTLD_NEXT, "ftw"); P(p); return r(p, fn, fd); }
+int ftw64(const char* p, __ftw64_func_t fn, int fd) { static int (*r)(const char*, __ftw64_func_t, int); if (!r) r = dlsym(RTLD_NEXT, "ftw64"); P(p); return r(p, fn, fd); }
+int nftw(const char* p, __nftw_func_t fn, int fd, int fl) { static int (*r)(const char*, __nftw_func_t, int, int); if (!r) r = dlsym(RTLD_NEXT, "nftw"); P(p); return r(p, fn, fd, fl); }
+int nftw64(const char* p, __nftw64_func_t fn, int fd, int fl) { static int (*r)(const char*, __nftw64_func_t, int, int); if (!r) r = dlsym(RTLD_NEXT, "nftw64"); P(p); return r(p, fn, fd, fl); }
+#include <glob.h>
+int glob(const char* pat, int fl, int (*err)(const char*, int), glob_t* pg) {
+  static int (*r)(const char*, int, int (*)(const char*, int), glob_t*); if (!r) r = dlsym(RTLD_NEXT, "glob");
+  if (!(fl & GLOB_ALTDIRFUNC) && pg) {
+    pg->gl_closedir = (void (*)(void*))closedir; pg->gl_readdir = (struct dirent* (*)(void*))readdir;
+    pg->gl_opendir = (void* (*)(const char*))opendir; pg->gl_lstat = lstat; pg->gl_stat = stat;
+    int rc = r(pat, fl | GLOB_ALTDIRFUNC, err, pg); pg->gl_flags &= ~GLOB_ALTDIRFUNC; return rc;
+  }
+  return r(pat, fl, err, pg); }
+int glob64(const char* pat, int fl, int (*err)(const char*, int), glob64_t* pg) {
+  static int (*r)(const char*, int, int (*)(const char*, int), glob64_t*); if (!r) r = dlsym(RTLD_NEXT, "glob64");
+  if (!(fl & GLOB_ALTDIRFUNC) && pg) {
+    pg->gl_closedir = (void (*)(void*))closedir; pg->gl_readdir = (struct dirent64* (*)(void*))readdir64;
+    pg->gl_opendir = (void* (*)(const char*))opendir; pg->gl_lstat = lstat64; pg->gl_stat = stat64;
+    int rc = r(pat, fl | GLOB_ALTDIRFUNC, err, pg); pg->gl_flags &= ~GLOB_ALTDIRFUNC; return rc;
+  }
+  return r(pat, fl, err, pg); }
 void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "dlopen"); if (!p) return r(p, fl); P(p); return r(p, fl); }
 #endif
 
