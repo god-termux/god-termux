@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
   // Failure cleanup after several shebang allocations, preserving errno.
   for (int f = 0; f < 16; f++) {
     fail_after = f; assert(execve(argv[1], av, env) == -1);
-    assert(errno == ENOMEM || errno == ENOENT); assert(alive == 0);
+    assert(errno == ENOMEM || errno == ENOENT || errno == ENOEXEC || errno == EACCES); assert(alive == 0);   // the kernel itself refuses the placeholder interpreter
   }
   // Exercise the glibc loader argv/environment and every allocation failure.
   for (int f = 0; f < 8; f++) {

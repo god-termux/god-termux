@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='dapt-opt-') as tmp:
     assert 'PATH="$D/.ddpkg-bin:$D/usr/bin:$D/bin:$PATH' in wrapper
     (wrappers / '.version').write_text('old\n')
     run(defs, 'wrappers')
-    assert (wrappers / '.version').read_text().startswith('4|')
+    assert (wrappers / '.version').read_text().startswith('5|')
     # --fix resolves the requested package and broken dependencies in the same Debian root.
     default_root = root / 'debian'
     (default_root / 'etc/apt').mkdir(parents=True, exist_ok=True)

@@ -35,7 +35,7 @@ fi
 gen() { sed "s#@P@#$P#g; s#@D@#$D#g"; }
 
 # Bump when wrapper templates change; include both roots so relocated trees refresh.
-WRAPPER_VERSION=4
+WRAPPER_VERSION=5
 WRAPPER_TOOLS=(dpkg fixlinks update-alternatives dpkg-maintscript-helper mkdir chown chgrp
   update-rc.d invoke-rc.d deb-systemd-helper deb-systemd-invoke systemctl systemd-tmpfiles
   systemd-sysusers systemd-machine-id-setup policy-rc.d add-shell remove-shell dpkg-statoverride
@@ -70,7 +70,7 @@ E2
 #!@P@/bin/bash
 # absolute symlinks inside the Debian tree point at host paths; the kernel resolves them itself, so re-point them into the tree
 D=@D@
-find "$D" -xdev -type l -printf '%p\0%l\0' 2>/dev/null | while IFS= read -r -d '' l && IFS= read -r -d '' t; do
+find "$D" -xdev -type l -lname '/*' ! -lname "$D/*" ! -lname '/data/*' ! -lname '/proc/*' ! -lname '/sys/*' ! -lname '/dev/*' ! -lname '/system/*' -printf '%p\0%l\0' 2>/dev/null | while IFS= read -r -d '' l && IFS= read -r -d '' t; do
   case "$t" in
     "$D"/*|/data/*|/proc/*|/sys/*|/dev/*|/system/*) continue ;;
     /*) if [ -e "$D$t" ] || [ -L "$D$t" ]; then ln -sfn "$D$t" "$l"; fi ;;

@@ -11,6 +11,8 @@ env.pop('LD_PRELOAD', None)
 with tempfile.TemporaryDirectory(prefix='fhs-memory-') as tmp:
     root = Path(tmp)
     script = root / 'script'
+    (root / 'missing').write_bytes(b'not-an-elf-interpreter\n')   # must exist: a missing interpreter is answered with ENOENT without reaching the kernel
+    (root / 'missing').chmod(0o700)
     script.write_text('#!' + str(root / 'missing') + ' option\n')
     script.chmod(0o700)
     elf = root / 'glibc-elf'

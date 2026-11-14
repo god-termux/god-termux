@@ -126,7 +126,9 @@ static int prepare(struct prep_mem* mem, const char* path, char* const argv[], c
   { const char* fe = path && !strcmp(path, "/proc/self/exe") ? getenv("FHS_EXE") : 0; if (fe && fe[0]) path = fe; }
   for (;;) {
     const char* real = fmap(path, buf);
-    struct stat st; int haveSt = FHS_SYS5(SYS_newfstatat, AT_FDCWD, real, &st, 0, 0) == 0 && S_ISREG(st.st_mode);
+    struct stat st; long sr = FHS_SYS5(SYS_newfstatat, AT_FDCWD, real, &st, 0, 0);
+    if (sr < 0 && (errno == ENOENT || errno == ENOTDIR)) return -1;   // not there: the kernel would say the same (execvp tries every PATH entry); skip the open and the exec
+    int haveSt = sr == 0 && S_ISREG(st.st_mode);
     int kind = haveSt ? fc_get(&st) : 0;
     if (kind) goto act;
     int fd = FHS_SYS5(SYS_openat, AT_FDCWD, real, O_RDONLY | O_CLOEXEC, 0, 0);
