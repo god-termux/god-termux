@@ -35,7 +35,7 @@ fi
 gen() { sed "s#@P@#$P#g; s#@D@#$D#g"; }
 
 # Bump when wrapper templates change; include both roots so relocated trees refresh.
-WRAPPER_VERSION=5
+WRAPPER_VERSION=6
 WRAPPER_TOOLS=(dpkg fixlinks update-alternatives dpkg-maintscript-helper mkdir chown chgrp
   update-rc.d invoke-rc.d deb-systemd-helper deb-systemd-invoke systemctl systemd-tmpfiles
   systemd-sysusers systemd-machine-id-setup policy-rc.d add-shell remove-shell dpkg-statoverride
@@ -55,7 +55,7 @@ wrappers() {
 #!@P@/bin/bash
 # dpkg for the isolated Debian tree. Under the fhs-run supervisor in "Debian mode" so maintainer scripts see /etc,/usr,/var inside @D@.
 D=@D@
-export FHS_DEBIAN=1 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
+export FHS_DEBIAN=1 FHS_LINKCOPY=1 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 R=""; [ -x @P@/glibc/shim/fhs-run ] && R=@P@/glibc/shim/fhs-run
 PATH="$D/.ddpkg-bin:$D/usr/bin:$D/bin:$PATH:$D/usr/sbin:$D/sbin" LD_PRELOAD="@P@/glibc/shim/libdapt-nolink.so${LD_PRELOAD:+:$LD_PRELOAD}" $R @P@/bin/dpkg --admindir=$D/var/lib/dpkg --instdir=$D --force-architecture --force-script-chrootless --force-depends --log=$D/var/log/dpkg.log "$@"
 rc=$?

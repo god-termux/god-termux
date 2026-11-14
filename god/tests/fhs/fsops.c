@@ -27,6 +27,7 @@ static int ncb64(const char* p, const struct stat64* s, int t, struct FTW* f) { 
 #define OK(x) do { if ((x) != 0) { fprintf(stderr, "%s:%d: %s: %s\n", __FILE__, __LINE__, #x, strerror(errno)); return 1; } } while (0)
 int bmain(int argc, char** argv) {
   (void)argc; (void)argv;
+  setenv("FHS_LINKCOPY", "1", 1);   // dapt's dpkg wrapper sets it: a refused hard link becomes a copy
   system("rm -rf " R "*");
   OK(mkdir(T, 0700)); assert(exists(R));                                   // mkdir (already hooked)
   OK(mkdirat(AT_FDCWD, T "/sub", 0700)); assert(exists(R "/sub"));
@@ -37,8 +38,8 @@ int bmain(int argc, char** argv) {
   OK(symlink("target-stays-verbatim", T "/ln")); char buf[64]; ssize_t n = readlink(R "/ln", buf, sizeof buf - 1); assert(n > 0); buf[n] = 0; assert(!strcmp(buf, "target-stays-verbatim"));
   OK(symlinkat("x", AT_FDCWD, T "/ln2")); assert(exists(R "/ln2"));
   // Android forbids hard links for apps (SELinux): then only the absence of ENOENT shows the path was mapped
-  if (link(T "/d", T "/hard")) assert(errno == EACCES || errno == EPERM); else assert(exists(R "/hard"));
-  if (linkat(AT_FDCWD, T "/d", AT_FDCWD, T "/hard2", 0)) assert(errno == EACCES || errno == EPERM); else assert(exists(R "/hard2"));
+  OK(link(T "/d", T "/hard")); assert(exists(R "/hard")); { char c[8] = {0}; int f = open(T "/hard", O_RDONLY); assert(f >= 0 && read(f, c, 2) == 2 && !strcmp(c, "hi")); close(f); }   // hard link, or a copy where Android refuses it
+  OK(linkat(AT_FDCWD, T "/d", AT_FDCWD, T "/hard2", 0)); assert(exists(R "/hard2"));
   OK(chmod(T "/d", 0640)); struct stat st; assert(stat(R "/d", &st) == 0 && (st.st_mode & 0777) == 0640);
   OK(fchmodat(AT_FDCWD, T "/d", 0600, 0));
   OK(chown(T "/d", getuid(), getgid())); OK(lchown(T "/ln", getuid(), getgid())); OK(fchownat(AT_FDCWD, T "/d", getuid(), getgid(), 0));

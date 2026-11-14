@@ -345,8 +345,21 @@ int renameat(int od, const char* o, int nd, const char* n) { PW2(o, n); return F
 int renameat2(int od, const char* o, int nd, const char* n, unsigned f) { PW2(o, n); return FHS_SYS5(SYS_renameat2, od, o, nd, n, f); }
 int symlink(const char* t, const char* n) { PW(n, 1); return FHS_SYS5(SYS_symlinkat, t, AT_FDCWD, n, 0, 0); }   // the target is stored verbatim
 int symlinkat(const char* t, int nd, const char* n) { PW(n, 1); return FHS_SYS5(SYS_symlinkat, t, nd, n, 0, 0); }
-int link(const char* o, const char* n) { PW2(o, n); return FHS_SYS5(SYS_linkat, AT_FDCWD, o, AT_FDCWD, n, 0); }
-int linkat(int od, const char* o, int nd, const char* n, int f) { PW2(o, n); return FHS_SYS5(SYS_linkat, od, o, nd, n, f); }
+// An app uid may not create hard links (SELinux). FHS_LINKCOPY=1 (set by the dpkg wrapper of dapt) turns a refused link of a regular file into a copy,
+// which is what libdapt-nolink.so did for dpkg itself; maintainer scripts and dpkg-divert run under this shim instead and never saw that library.
+static int fhs_linkcopy(int od, const char* o, int nd, const char* n, int f) {
+  static int on = -1; if (on < 0) { const char* e = getenv("FHS_LINKCOPY"); on = e && e[0] == '1'; }
+  if (!on || (errno != EACCES && errno != EPERM)) return -1;
+  int se = errno, in = openat(od, o, O_RDONLY | O_CLOEXEC | ((f & AT_SYMLINK_FOLLOW) ? 0 : O_NOFOLLOW)); struct stat st;
+  if (in < 0 || fstat(in, &st) || !S_ISREG(st.st_mode)) { if (in >= 0) close(in); errno = se; return -1; }
+  int out = openat(nd, n, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, st.st_mode & 07777); if (out < 0) { int e = errno; close(in); errno = e; return -1; }
+  char buf[65536]; ssize_t r, w;
+  while ((r = read(in, buf, sizeof buf)) > 0) for (w = 0; w < r; ) { ssize_t k = write(out, buf + w, r - w); if (k < 0) { int e = errno; close(in); close(out); unlinkat(nd, n, 0); errno = e; return -1; } w += k; }
+  int e = errno; close(in); close(out); if (r < 0) { unlinkat(nd, n, 0); errno = e; return -1; }
+  return 0;
+}
+int link(const char* o, const char* n) { PW2(o, n); int r = FHS_SYS5(SYS_linkat, AT_FDCWD, o, AT_FDCWD, n, 0); return r < 0 ? fhs_linkcopy(AT_FDCWD, o, AT_FDCWD, n, 0) : r; }
+int linkat(int od, const char* o, int nd, const char* n, int f) { PW2(o, n); int r = FHS_SYS5(SYS_linkat, od, o, nd, n, f); return r < 0 ? fhs_linkcopy(od, o, nd, n, f) : r; }
 int chown(const char* p, uid_t u, gid_t g) { P(p); return FHS_SYS5(SYS_fchownat, AT_FDCWD, p, u, g, 0); }
 int lchown(const char* p, uid_t u, gid_t g) { P(p); return FHS_SYS5(SYS_fchownat, AT_FDCWD, p, u, g, AT_SYMLINK_NOFOLLOW); }
 int fchownat(int d, const char* p, uid_t u, gid_t g, int f) { P(p); return FHS_SYS5(SYS_fchownat, d, p, u, g, f); }

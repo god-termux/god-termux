@@ -19,3 +19,5 @@ fi
 
 # Debian (arm64) tree installed with ddpkg
 case ":$PATH:" in *:"$PREFIX/debian/usr/bin":*) ;; *) export PATH="$PATH:$PREFIX/debian/usr/bin:$PREFIX/debian/usr/games:$PREFIX/debian/bin" ;; esac
+# sbin last: Termux commands win, but Debian daemons and tools (zmap, ...) are found; checked on its own so shells that already have usr/bin get it too
+case ":$PATH:" in *:"$PREFIX/debian/usr/sbin":*) ;; *) export PATH="$PATH:$PREFIX/debian/usr/sbin:$PREFIX/debian/sbin" ;; esac
