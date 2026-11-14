@@ -19,6 +19,8 @@
 #include <stddef.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <utime.h>
+#include <sys/time.h>
 
 #define LDSO GLIB "/lib/ld-linux-aarch64.so.1"
 #define SHIM_G GLIB "/shim/libfhs-glibc.so"
@@ -350,6 +352,35 @@ int utimes(const char* p, const struct timeval tv[2]) {
   if (tv) for (int i = 0; i < 2; i++) { if (tv[i].tv_usec < 0 || tv[i].tv_usec >= 1000000) { errno = EINVAL; return -1; } ts[i].tv_sec = tv[i].tv_sec; ts[i].tv_nsec = tv[i].tv_usec * 1000; }
   P(p); return FHS_SYS5(SYS_utimensat, AT_FDCWD, p, tv ? ts : NULL, 0, 0);
 }
+int futimesat(int d, const char* p, const struct timeval tv[2]) {
+  struct timespec ts[2];
+  if (tv) for (int i = 0; i < 2; i++) { if (tv[i].tv_usec < 0 || tv[i].tv_usec >= 1000000) { errno = EINVAL; return -1; } ts[i].tv_sec = tv[i].tv_sec; ts[i].tv_nsec = tv[i].tv_usec * 1000; }
+  if (p) { P(p); return FHS_SYS5(SYS_utimensat, d, p, tv ? ts : NULL, 0, 0); } return FHS_SYS5(SYS_utimensat, d, p, tv ? ts : NULL, 0, 0);
+}
+int lutimes(const char* p, const struct timeval tv[2]) {
+  struct timespec ts[2];
+  if (tv) for (int i = 0; i < 2; i++) { if (tv[i].tv_usec < 0 || tv[i].tv_usec >= 1000000) { errno = EINVAL; return -1; } ts[i].tv_sec = tv[i].tv_sec; ts[i].tv_nsec = tv[i].tv_usec * 1000; }
+  P(p); return FHS_SYS5(SYS_utimensat, AT_FDCWD, p, tv ? ts : NULL, AT_SYMLINK_NOFOLLOW, 0);
+}
+int utime(const char* p, const struct utimbuf* u) {
+  struct timespec ts[2]; if (u) { ts[0].tv_sec = u->actime; ts[0].tv_nsec = 0; ts[1].tv_sec = u->modtime; ts[1].tv_nsec = 0; }
+  P(p); return FHS_SYS5(SYS_utimensat, AT_FDCWD, p, u ? ts : NULL, 0, 0);
+}
+int truncate(const char* p, off_t n) { P(p); return FHS_SYS5(SYS_truncate, p, n, 0, 0, 0); }
+int truncate64(const char* p, off64_t n) { P(p); return FHS_SYS5(SYS_truncate, p, n, 0, 0, 0); }
+int mknodat(int d, const char* p, mode_t m, dev_t dev) { PW(p, 1); return FHS_SYS5(SYS_mknodat, d, p, m, dev, 0); }
+int mknod(const char* p, mode_t m, dev_t dev) { PW(p, 1); return FHS_SYS5(SYS_mknodat, AT_FDCWD, p, m, dev, 0); }
+int mkfifoat(int d, const char* p, mode_t m) { PW(p, 1); return FHS_SYS5(SYS_mknodat, d, p, (m & 07777) | S_IFIFO, 0, 0); }
+int mkfifo(const char* p, mode_t m) { PW(p, 1); return FHS_SYS5(SYS_mknodat, AT_FDCWD, p, (m & 07777) | S_IFIFO, 0, 0); }
+// extended attributes (the f* variants take descriptors and need nothing)
+int setxattr(const char* p, const char* nm, const void* v, size_t n, int f) { P(p); return FHS_SYS5(SYS_setxattr, p, nm, v, n, f); }
+int lsetxattr(const char* p, const char* nm, const void* v, size_t n, int f) { P(p); return FHS_SYS5(SYS_lsetxattr, p, nm, v, n, f); }
+ssize_t getxattr(const char* p, const char* nm, void* v, size_t n) { P(p); return FHS_SYS5(SYS_getxattr, p, nm, v, n, 0); }
+ssize_t lgetxattr(const char* p, const char* nm, void* v, size_t n) { P(p); return FHS_SYS5(SYS_lgetxattr, p, nm, v, n, 0); }
+ssize_t listxattr(const char* p, char* l, size_t n) { P(p); return FHS_SYS5(SYS_listxattr, p, l, n, 0, 0); }
+ssize_t llistxattr(const char* p, char* l, size_t n) { P(p); return FHS_SYS5(SYS_llistxattr, p, l, n, 0, 0); }
+int removexattr(const char* p, const char* nm) { P(p); return FHS_SYS5(SYS_removexattr, p, nm, 0, 0, 0); }
+int lremovexattr(const char* p, const char* nm) { P(p); return FHS_SYS5(SYS_lremovexattr, p, nm, 0, 0, 0); }
 void* dlopen(const char* p, int fl) { static void* (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "dlopen"); if (!p) return r(p, fl); P(p); return r(p, fl); }
 #endif
 
