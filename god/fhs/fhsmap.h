@@ -48,7 +48,7 @@ static void fhs_cache_clear(void) { fhs_gen++; }
 static int fhs_dirty(const char* p) {
   if (!p || p[0] != '/') return 1;
   if (fhs_scope(p)) return !pre(p, "/tmp");
-  return pre(p, PFX) || pre(p, GLIB) || pre(p, DEB);
+  return (pre(p, PFX) && !pre(p, PFX "/tmp")) || pre(p, GLIB) || pre(p, DEB);   // $TMPDIR (PFX/tmp) is the only target of /tmp as well
 }
 static long fhs_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC_COARSE, &t); return t.tv_sec * 1000L + t.tv_nsec / 1000000; }
 static unsigned fhs_hash(const char* p) { unsigned h = 2166136261u; while (*p) h = (h ^ (unsigned char)*p++) * 16777619u; return h; }

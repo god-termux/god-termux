@@ -27,10 +27,10 @@ static const char* fast_map(const char* p, char* b, int create) {
   fhs_create = 1; p = fmap(p, b); fhs_create = 0; return p;
 }
 static int fast_open(int d, const char* p, int flags, mode_t mode) {
-  char b[PATH_MAX];
+  char b[PATH_MAX]; int w = (flags & O_CREAT) && fhs_dirty(p);
   if (!(p && p[0] == '/' && fhs_acct_open(p, flags))) p = fast_map(p, b, flags & O_CREAT);
   int fd = TAGGED(SYS_openat, d, p, flags, mode, 0);
-  if (flags & O_CREAT) fhs_cache_clear();
+  if (w) fhs_cache_clear();
   return fd;
 }
 #define OPEN_ADAPTER(name, decl, call, dir) \
@@ -78,19 +78,19 @@ ssize_t readlink(const char* p, char* out, size_t size) { return readlinkat(AT_F
 // ---- creating and modifying calls: "create" lookups, like handle_write() in the supervisor. The lookup cache of this process
 // is dropped afterwards, because the call may have changed which tree a name is found in.
 int mkdirat(int d, const char* p, mode_t mode) {
-  if (fhs_fast_active()) { char b[PATH_MAX]; p = fast_map(p, b, 1); int r = TAGGED(SYS_mkdirat, d, p, mode, 0, 0); fhs_cache_clear(); return r; }
+  if (fhs_fast_active()) { char b[PATH_MAX]; int w = fhs_dirty(p); p = fast_map(p, b, 1); int r = TAGGED(SYS_mkdirat, d, p, mode, 0, 0); if (w) fhs_cache_clear(); return r; }
   return REAL(int (*)(int, const char*, mode_t), mkdirat)(d, p, mode);
 }
 int mkdir(const char* p, mode_t mode) { return mkdirat(AT_FDCWD, p, mode); }
 int unlinkat(int d, const char* p, int flags) {
-  if (fhs_fast_active()) { char b[PATH_MAX]; p = fast_map(p, b, 1); int r = TAGGED(SYS_unlinkat, d, p, flags, 0, 0); fhs_cache_clear(); return r; }
+  if (fhs_fast_active()) { char b[PATH_MAX]; int w = fhs_dirty(p); p = fast_map(p, b, 1); int r = TAGGED(SYS_unlinkat, d, p, flags, 0, 0); if (w) fhs_cache_clear(); return r; }
   return REAL(int (*)(int, const char*, int), unlinkat)(d, p, flags);
 }
 int unlink(const char* p) { return unlinkat(AT_FDCWD, p, 0); }
 int rmdir(const char* p) { return unlinkat(AT_FDCWD, p, AT_REMOVEDIR); }
 static int fast_rename(int od, const char* o, int nd, const char* n, unsigned flags) {
-  char b1[PATH_MAX], b2[PATH_MAX]; o = fast_map(o, b1, 1); n = fast_map(n, b2, 1);
-  int r = TAGGED(SYS_renameat2, od, o, nd, n, flags); fhs_cache_clear(); return r;
+  char b1[PATH_MAX], b2[PATH_MAX]; int w = fhs_dirty(o) || fhs_dirty(n); o = fast_map(o, b1, 1); n = fast_map(n, b2, 1);
+  int r = TAGGED(SYS_renameat2, od, o, nd, n, flags); if (w) fhs_cache_clear(); return r;
 }
 int rename(const char* o, const char* n) {
   if (fhs_fast_active()) return fast_rename(AT_FDCWD, o, AT_FDCWD, n, 0);
@@ -107,7 +107,7 @@ int renameat2(int od, const char* o, int nd, const char* n, unsigned flags) {
   return real(od, o, nd, n, flags);
 }
 static int fast_symlink(const char* target, int nd, const char* n) {
-  char b[PATH_MAX]; n = fast_map(n, b, 1); int r = TAGGED(SYS_symlinkat, target, nd, n, 0, 0); fhs_cache_clear(); return r;
+  char b[PATH_MAX]; int w = fhs_dirty(n); n = fast_map(n, b, 1); int r = TAGGED(SYS_symlinkat, target, nd, n, 0, 0); if (w) fhs_cache_clear(); return r;
 }
 int symlink(const char* target, const char* n) {
   if (fhs_fast_active()) return fast_symlink(target, AT_FDCWD, n);
@@ -118,8 +118,8 @@ int symlinkat(const char* target, int nd, const char* n) {
   return REAL(int (*)(const char*, int, const char*), symlinkat)(target, nd, n);
 }
 static int fast_link(int od, const char* o, int nd, const char* n, int flags) {
-  char b1[PATH_MAX], b2[PATH_MAX]; o = fast_map(o, b1, 1); n = fast_map(n, b2, 1);
-  int r = TAGGED(SYS_linkat, od, o, nd, n, flags); fhs_cache_clear(); return r;
+  char b1[PATH_MAX], b2[PATH_MAX]; int w = fhs_dirty(o) || fhs_dirty(n); o = fast_map(o, b1, 1); n = fast_map(n, b2, 1);
+  int r = TAGGED(SYS_linkat, od, o, nd, n, flags); if (w) fhs_cache_clear(); return r;
 }
 int link(const char* o, const char* n) {
   if (fhs_fast_active()) return fast_link(AT_FDCWD, o, AT_FDCWD, n, 0);
