@@ -9,7 +9,8 @@
 
 **Причина `EEXIST` на втором запуске хоста (проверено 2026-11-13):** `chrome-native-host` — Bun-бинарник с `PT_INTERP`, шим запускает его через `ld.so` + `libfhs-glibc.so` без супервизора; Bun часть файловых проверок делает прямым `svc #0` (в обход libc). После `mkdir` → `EEXIST` проверка «это каталог?» идёт по настоящему `/tmp` и не находит его. Под `fhs-run` те же вызовы перехватываются, и второй запуск проходит.
 Проверка: при существующем `$PREFIX/tmp/claude-mcp-browser-bridge-unknown` голый запуск падает с `EEXIST`, `fhs-run ~/.claude/chrome/chrome-native-host` слушает сокет.
-**Не сделано:** запускать хост Claude через `fhs-run` (обёртка вокруг `~/.claude/chrome/chrome-native-host`); подтвердить подключение расширения (`FHS_DEBIAN=1 claude --chrome`).
+**Сделано (2026-11-14):** обёртка `god/runtime/claude-chrome-host` (ставится в `$PREFIX/bin`, входит в `build-local.sh`) запускает `~/.claude/chrome/chrome-native-host` под `fhs-run`; `claude-chrome-host --install` переписывает `path` в манифестах всех браузеров под `~/.config` (Claude Code перегенерирует манифесты и скрипт сам: после `claude --chrome` повторить `--install`). Проверено: три запуска подряд при существующем каталоге моста слушают сокет, `connect` к нему проходит, права 0600; манифесты на телефоне переключены (копия `$PREFIX/tmp/nmh-backup`).
+**Не проверено:** подключение самого расширения (браузер с профилем `~/.config/chrome-native` не запускался) и `FHS_DEBIAN=1 claude --chrome`.
 
 ## 2. Надёжность установки шима (из отчёта по `exec(login): Permission denied`)
 

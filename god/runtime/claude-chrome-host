@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Native messaging host of the Claude in Chrome extension, started under the fhs-run supervisor.
+# The host is a Bun binary that checks "is this existing path a directory" with raw syscalls, which only the supervisor translates (/tmp -> $PREFIX/tmp);
+# without it the second start dies with "EEXIST: mkdir /tmp/claude-mcp-browser-bridge-...". Claude Code regenerates ~/.claude/chrome/chrome-native-host
+# and the manifests on its own, so this wrapper runs that script (it follows version updates) and
+#   claude-chrome-host --install     points the manifests of all Chromium-family profiles under ~/.config at this wrapper (run again after `claude --chrome` rewrote them).
+P=${PREFIX:-/data/data/com.termux/files/usr}; H=${HOME:-/data/data/com.termux/files/home}; F=$P/glibc/shim/fhs-run
+if [ "$1" = --install ]; then
+  me=$P/bin/claude-chrome-host; n=0
+  for m in $(find "$H/.config" -path '*NativeMessagingHosts/com.anthropic.claude_code_browser_extension.json' 2>/dev/null); do
+    sed -i "s|\"path\": *\"[^\"]*\"|\"path\": \"$me\"|" "$m" && n=$((n + 1)) && echo "manifest: $m"
+  done
+  echo "$n manifest(s) now point to $me"; exit 0
+fi
+S=$H/.claude/chrome/chrome-native-host
+[ -x "$S" ] || { echo "claude-chrome-host: $S missing (start 'claude --chrome' once)" >&2; exit 1; }
+[ -x "$F" ] && exec "$F" "$S" "$@"
+exec "$S" "$@"
