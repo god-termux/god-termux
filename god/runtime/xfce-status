@@ -1,0 +1,61 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# xfce-status: writes panel data (RAM/CPU rings, battery, wifi) for xfce-wl genmon into $PREFIX/tmp/god-status
+# CPU/RAM come from /data/local/tmp/god-stat.sh, which runs as shell uid via adb (dsu) and streams one line per second.
+P=${PREFIX:-/data/data/com.termux/files/usr}; O=$P/tmp/god-status; mkdir -p "$O"
+echo $$ > "$O/pid"
+# stats come from the adb-side server (god-statd, 127.0.0.1:47474); nothing is stored on disk
+god-statd start >/dev/null 2>&1 &
+tick=0; last=""
+while :; do
+  line=$(god-statd get); age=0
+  [ -z "$line" ] && [ $((tick % 15)) -eq 0 ] && { god-statd start >/dev/null 2>&1 & }
+  set -- $line
+  sc=0; uc=0; ur=0
+  if [ $# -eq 14 ]; then
+    src="adb /proc/stat"; ps="${@:1:8}"; mp=$9; mu=${10}; mtot=${11}; sc=${12}; uc=${13}; ur=${14}
+  else
+    src="frequency estimate"; ps=""
+    for c in 0 1 2 3 4 5 6 7; do d=/sys/devices/system/cpu/cpu$c/cpufreq
+      cr=$(cat $d/scaling_cur_freq 2>/dev/null); mx=$(cat $d/cpuinfo_max_freq 2>/dev/null); mn=$(cat $d/cpuinfo_min_freq 2>/dev/null)
+      if [ -n "$cr" ] && [ "${mx:-0}" -gt "${mn:-0}" ]; then u=$(( (cr-mn)*100/(mx-mn) )); [ $u -lt 0 ] && u=0; else u=0; fi; ps="$ps $u"; done
+    mt=$(sed -n 's/^MemTotal: *\([0-9]*\).*/\1/p' /proc/meminfo); ma=$(sed -n 's/^MemAvailable: *\([0-9]*\).*/\1/p' /proc/meminfo)
+    mp=$(( (mt-ma)*100/mt )); mu=$(((mt-ma)/1024)); mtot=$((mt/1024))
+  fi
+  # rings are only redrawn (Python) when the values changed
+  if [ "$ps|$mp|$sc|$uc|$ur" != "$last" ]; then
+    last="$ps|$mp|$sc|$uc|$ur"
+    xfce-ring "$O/sys.png" 2 22 $sc $uc
+    printf '<img>/tmp/god-status/sys.png</img><txt>%s%%/%s%%</txt><tool>CPU load (%s)\nWhole system: %s%%\nTermux processes: %s%%  (share of total CPU capacity)\nLeft ring: system, right ring: Termux</tool>\n' "$sc" "$uc" "$src" "$sc" "$uc" > "$O/sys.tmp" && mv "$O/sys.tmp" "$O/sys"
+    xfce-ring "$O/ram.png" 1 22 $mp
+    printf '<img>/tmp/god-status/ram.png</img><txt>%s%% T%sM</txt><tool>RAM: %s / %s MB used (%s%%)\nTermux processes: %s MB (anonymous + shared memory, all Termux processes combined)</tool>\n' "$mp" "$ur" "$mu" "$mtot" "$mp" "$ur" > "$O/ram.tmp" && mv "$O/ram.tmp" "$O/ram"
+    xfce-ring "$O/cpu.png" 4 11 $ps
+    tip=""; n=0; for u in $ps; do tip="$tip\ncore $n: $u%"; n=$((n+1)); done
+    printf '<img>/tmp/god-status/cpu.png</img><tool>CPU cores load (%s)%b</tool>\n' "$src" "$tip" > "$O/cpu.tmp" && mv "$O/cpu.tmp" "$O/cpu"
+  fi
+  tick=$((tick+1))
+  # Exit when the xfce-wl session is gone. wlcomp leaves its socket file behind when it dies, and the XfceStatus mod restarts this script
+  # while the file exists, so a dead session must also lose the stale socket (otherwise: two JVM launches via termux-api every 20 s, forever).
+  # Skipped for the first minute (compositor may still be starting) and checked about every 30 s.
+  if [ $tick -gt 30 ] && [ $((tick % 15)) -eq 0 ]; then
+    python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect(sys.argv[1])' "$P/tmp/wayland-1" 2>/dev/null || { rm -f "$P/tmp/wayland-1"; rm -f "$O/pid"; exit 0; }
+  fi
+  if [ $((tick % 5)) -eq 1 ]; then
+    b=$(timeout 15 termux-battery-status 2>/dev/null </dev/null)
+    if [ -n "$b" ]; then
+      pct=$(echo "$b" | sed -n 's/.*"percentage": *\([0-9]*\).*/\1/p'); st=$(echo "$b" | sed -n 's/.*"status": *"\([A-Z_]*\)".*/\1/p'); t=$(echo "$b" | sed -n 's/.*"temperature": *\([0-9.]*\).*/\1/p')
+      case $st in CHARGING) ic="⚡";; FULL) ic="✔";; *) ic="";; esac
+      printf '<txt> BAT %s%%%s </txt><tool>Battery %s%%, %s, %s°C</tool>\n' "$pct" "$ic" "$pct" "$st" "$t" > "$O/battery.tmp" && mv "$O/battery.tmp" "$O/battery"
+    fi
+    w=$(timeout 15 termux-wifi-connectioninfo 2>/dev/null </dev/null)
+    if [ -n "$w" ]; then
+      rssi=$(echo "$w" | sed -n 's/.*"rssi": *\(-\?[0-9]*\).*/\1/p'); ssid=$(echo "$w" | sed -n 's/.*"ssid": *"\([^"]*\)".*/\1/p'); ip=$(echo "$w" | sed -n 's/.*"ip": *"\([^"]*\)".*/\1/p')
+      sp=$(echo "$w" | sed -n 's/.*"link_speed_mbps": *\([0-9]*\).*/\1/p'); fr=$(echo "$w" | sed -n 's/.*"frequency_mhz": *\([0-9]*\).*/\1/p')
+      if [ -n "$ip" ] && [ "$ip" != "0.0.0.0" ] && [ -n "$rssi" ]; then
+        q=$(( 2*(rssi+100) )); [ $q -gt 100 ] && q=100; [ $q -lt 0 ] && q=0
+        if [ $q -ge 75 ]; then bars="▂▄▆█"; elif [ $q -ge 50 ]; then bars="▂▄▆▁"; elif [ $q -ge 25 ]; then bars="▂▄▁▁"; else bars="▂▁▁▁"; fi
+        printf '<txt> %s %s%% </txt><tool>Wi-Fi %s\nQuality %s%% (%s dBm)\nIP %s, %s Mbps, %s MHz</tool>\n' "$bars" "$q" "$ssid" "$q" "$rssi" "$ip" "$sp" "$fr" > "$O/wifi.tmp" && mv "$O/wifi.tmp" "$O/wifi"
+      else printf '<txt> ▁▁▁▁ no net </txt><tool>No Wi-Fi connection</tool>\n' > "$O/wifi"; fi
+    fi
+  fi
+  sleep 2
+done
