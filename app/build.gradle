@@ -164,8 +164,17 @@ task generateGodAssets {
     inputs.property("ndkVersion", android.ndkVersion ?: "none")
     outputs.dir(outDir)
     doLast {
-        project.copy { from new File(godRoot, "runtime"); include "dapt", "gsh", "wlrun"; into new File(outDir, "bin") }
-        project.copy { from new File(godRoot, "runtime"); include "glibc-fhs.sh"; into new File(outDir, "etc/profile.d") }
+        // god-termux: force LF byte-wise — a Windows checkout may have CRLF, and a \r in the shebang
+        // breaks exec (bad interpreter). Gradle's copy filter is no good here: it rewrites lines
+        // with the platform separator, reintroducing CRLF on Windows.
+        def copyLf = { String name, File destDir ->
+            def src = new File(godRoot, "runtime/${name}")
+            def dst = new File(destDir, name)
+            dst.parentFile.mkdirs()
+            dst.setBytes(src.getText("UTF-8").replace("\r\n", "\n").getBytes("UTF-8"))
+        }
+        ["dapt", "gsh", "wlrun"].each { copyLf(it, new File(outDir, "bin")) }
+        copyLf("glibc-fhs.sh", new File(outDir, "etc/profile.d"))
         def os = System.getProperty("os.name").toLowerCase()
         def hostTag = os.contains("win") ? "windows-x86_64" : (os.contains("mac") ? "darwin-x86_64" : "linux-x86_64")
         def clang = new File(android.ndkDirectory, "toolchains/llvm/prebuilt/${hostTag}/bin/clang" + (os.contains("win") ? ".exe" : ""))
@@ -173,10 +182,8 @@ task generateGodAssets {
             logger.lifecycle("god-termux: NDK clang not found (${clang}), skipping FHS shim (god/build-local.sh provides it on device)")
             return
         }
-        // god-termux: the FHS shim is written for 64-bit (arm64 primary, see god/fhs); 32-bit ABIs
-        // use different syscall numbers. On 32-bit devices glibc-fhs.sh degrades gracefully without
-        // the shim; dapt/gsh/wlrun scripts work on every ABI.
-        def targets = ["arm64-v8a": "aarch64-linux-android21", "x86_64": "x86_64-linux-android21"]
+        // god-termux: shim built for every ABI (god/fhs has per-arch syscall/audit-arch guards)
+        def targets = ["arm64-v8a": "aarch64-linux-android21", "armeabi-v7a": "armv7a-linux-androideabi21", "x86": "i686-linux-android21", "x86_64": "x86_64-linux-android21"]
         def md = java.security.MessageDigest.getInstance("SHA-256")
         def runCmd = { List<String> cmd ->
             def proc = new ProcessBuilder(cmd).redirectErrorStream(true).start()

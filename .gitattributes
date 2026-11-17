@@ -1,5 +1,5 @@
-*           text=auto
-*.bat       text eol=crlf
-*.gradle    text eol=lf
-*.mk        text eol=lf
-*.sh        text eol=lf
+# Shell scripts must keep LF even on Windows checkouts,
+# otherwise the shebang gets a trailing \r and exec fails with ENOENT (bad interpreter bash^M).
+god/runtime/* text eol=lf
+*.sh text eol=lf
+gradlew text eol=lf
