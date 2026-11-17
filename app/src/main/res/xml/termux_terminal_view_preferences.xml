@@ -10,6 +10,13 @@
             app:summaryOn="@string/termux_terminal_view_terminal_margin_adjustment_on"
             app:title="@string/termux_terminal_view_terminal_margin_adjustment_title" />
 
+        <!-- god-termux: split pane titles -->
+        <SwitchPreferenceCompat
+            app:key="show_pane_titles"
+            app:summaryOff="@string/termux_terminal_view_show_pane_titles_off"
+            app:summaryOn="@string/termux_terminal_view_show_pane_titles_on"
+            app:title="@string/termux_terminal_view_show_pane_titles_title" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>

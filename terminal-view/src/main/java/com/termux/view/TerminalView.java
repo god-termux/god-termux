@@ -523,6 +523,11 @@ public final class TerminalView extends View {
         invalidate();
     }
 
+    /** god-termux: lets split panes copy the current typeface to newly created terminal views. */
+    public Typeface getTypeface() {
+        return mRenderer.mTypeface;
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true;

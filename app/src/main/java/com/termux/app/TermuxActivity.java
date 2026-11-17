@@ -46,6 +46,9 @@ import com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences;
 import com.termux.app.terminal.TermuxSessionsListViewController;
 import com.termux.app.terminal.io.TerminalToolbarViewPager;
 import com.termux.app.terminal.TermuxTerminalViewClient;
+import com.termux.mod.split.PaneManager;
+import com.termux.mod.split.PaneView;
+import com.termux.mod.split.SplitNode;
 import com.termux.shared.termux.extrakeys.ExtraKeysView;
 import com.termux.shared.termux.interact.TextInputDialogUtils;
 import com.termux.shared.logger.Logger;
@@ -87,15 +90,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     TermuxService mTermuxService;
 
     /**
-     * The {@link TerminalView} shown in  {@link TermuxActivity} that displays the terminal.
+     * god-termux: the split pane manager — owns up to 4 terminal panes, the split tree and the focus.
+     * {@link #getTerminalView()} and {@link #getCurrentSession()} delegate to the focused pane.
      */
-    TerminalView mTerminalView;
-
-    /**
-     *  The {@link TerminalViewClient} interface implementation to allow for communication between
-     *  {@link TerminalView} and {@link TermuxActivity}.
-     */
-    TermuxTerminalViewClient mTermuxTerminalViewClient;
+    PaneManager mPanes;
 
     /**
      *  The {@link TerminalSessionClient} interface implementation to allow for communication between
@@ -251,9 +249,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setNewSessionButtonView();
 
-        setToggleKeyboardView();
+        setSplitScreenButtonView();
 
-        registerForContextMenu(mTerminalView);
+        setToggleKeyboardView();
 
         FileReceiverActivity.updateFileReceiverActivityComponentsState(this);
 
@@ -294,8 +292,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onStart();
 
-        if (mTermuxTerminalViewClient != null)
-            mTermuxTerminalViewClient.onStart();
+        if (mPanes != null)
+            mPanes.onStart();
 
         if (mPreferences.isTerminalMarginAdjustmentEnabled())
             addTermuxActivityRootViewGlobalLayoutListener();
@@ -314,8 +312,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onResume();
 
-        if (mTermuxTerminalViewClient != null)
-            mTermuxTerminalViewClient.onResume();
+        if (mPanes != null)
+            mPanes.onResume();
 
         // Check if a crash happened on last run of the app or if a plugin crashed and show a
         // notification with the crash details if it did
@@ -337,8 +335,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onStop();
 
-        if (mTermuxTerminalViewClient != null)
-            mTermuxTerminalViewClient.onStop();
+        if (mPanes != null)
+            mPanes.onStop();
 
         removeTermuxActivityRootViewGlobalLayoutListener();
 
@@ -423,7 +421,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                 boolean isFailSafe = intent.getBooleanExtra(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);
                 mTermuxTerminalSessionActivityClient.addNewSession(isFailSafe, null);
             } else {
-                mTermuxTerminalSessionActivityClient.setCurrentSession(mTermuxTerminalSessionActivityClient.getCurrentStoredSessionOrLast());
+                // god-termux: restore the split layout (falls back to the stored-or-last session in one pane)
+                mPanes.restoreState();
             }
         }
 
@@ -447,8 +446,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     private void reloadProperties() {
         mProperties.loadTermuxPropertiesFromDisk();
 
-        if (mTermuxTerminalViewClient != null)
-            mTermuxTerminalViewClient.onReloadProperties();
+        if (mPanes != null)
+            mPanes.onReloadProperties();
     }
 
 
@@ -484,16 +483,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
 
     private void setTermuxTerminalViewAndClients() {
-        // Set termux terminal view and session clients
+        // god-termux: the pane manager creates the terminal views (one per pane) and their view clients
         mTermuxTerminalSessionActivityClient = new TermuxTerminalSessionActivityClient(this);
-        mTermuxTerminalViewClient = new TermuxTerminalViewClient(this, mTermuxTerminalSessionActivityClient);
-
-        // Set termux terminal view
-        mTerminalView = findViewById(R.id.terminal_view);
-        mTerminalView.setTerminalViewClient(mTermuxTerminalViewClient);
-
-        if (mTermuxTerminalViewClient != null)
-            mTermuxTerminalViewClient.onCreate();
+        mPanes = new PaneManager(this);
+        mPanes.init();
 
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onCreate();
@@ -510,8 +503,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
 
     private void setTerminalToolbarView(Bundle savedInstanceState) {
-        mTermuxTerminalExtraKeys = new TermuxTerminalExtraKeys(this, mTerminalView,
-            mTermuxTerminalViewClient, mTermuxTerminalSessionActivityClient);
+        mTermuxTerminalExtraKeys = new TermuxTerminalExtraKeys(this, getTerminalView(),
+            mTermuxTerminalSessionActivityClient);
 
         final ViewPager terminalToolbarViewPager = getTerminalToolbarViewPager();
         if (mPreferences.shouldShowTerminalToolbar()) terminalToolbarViewPager.setVisibility(View.VISIBLE);
@@ -625,9 +618,27 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         });
     }
 
+    /** god-termux: drawer button that splits the focused pane (the entry point while there is only one pane). */
+    private void setSplitScreenButtonView() {
+        View splitButton = findViewById(R.id.split_screen_button);
+        if (splitButton == null) return;
+        splitButton.setVisibility(mProperties.isSplitScreenDisabled() ? View.GONE : View.VISIBLE);
+        splitButton.setOnClickListener(v -> {
+            android.widget.PopupMenu menu = new android.widget.PopupMenu(this, v);
+            menu.getMenu().add(0, 1, 0, R.string.action_split_right);
+            menu.getMenu().add(0, 2, 1, R.string.action_split_down);
+            menu.setOnMenuItemClickListener(item -> {
+                if (mPanes != null)
+                    mPanes.split(mPanes.focused(), item.getItemId() == 1 ? SplitNode.HORIZONTAL : SplitNode.VERTICAL);
+                return true;
+            });
+            menu.show();
+        });
+    }
+
     private void setToggleKeyboardView() {
         findViewById(R.id.toggle_keyboard_button).setOnClickListener(v -> {
-            mTermuxTerminalViewClient.onToggleSoftKeyboardRequest();
+            getTermuxTerminalViewClient().onToggleSoftKeyboardRequest();
             getDrawer().closeDrawers();
         });
 
@@ -671,21 +682,24 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
     @Override
     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
-        TerminalSession currentSession = getCurrentSession();
+        // god-termux: the menu belongs to the pane it was opened on
+        TerminalView terminalView = v instanceof TerminalView ? (TerminalView) v : getTerminalView();
+        if (terminalView == null) return;
+        TerminalSession currentSession = terminalView.getCurrentSession();
         if (currentSession == null) return;
 
-        boolean autoFillEnabled = mTerminalView.isAutoFillEnabled();
+        boolean autoFillEnabled = terminalView.isAutoFillEnabled();
 
         menu.add(Menu.NONE, CONTEXT_MENU_SELECT_URL_ID, Menu.NONE, R.string.action_select_url);
         menu.add(Menu.NONE, CONTEXT_MENU_SHARE_TRANSCRIPT_ID, Menu.NONE, R.string.action_share_transcript);
-        if (!DataUtils.isNullOrEmpty(mTerminalView.getStoredSelectedText()))
+        if (!DataUtils.isNullOrEmpty(terminalView.getStoredSelectedText()))
             menu.add(Menu.NONE, CONTEXT_MENU_SHARE_SELECTED_TEXT, Menu.NONE, R.string.action_share_selected_text);
         if (autoFillEnabled)
             menu.add(Menu.NONE, CONTEXT_MENU_AUTOFILL_USERNAME, Menu.NONE, R.string.action_autofill_username);
         if (autoFillEnabled)
             menu.add(Menu.NONE, CONTEXT_MENU_AUTOFILL_PASSWORD, Menu.NONE, R.string.action_autofill_password);
         menu.add(Menu.NONE, CONTEXT_MENU_RESET_TERMINAL_ID, Menu.NONE, R.string.action_reset_terminal);
-        menu.add(Menu.NONE, CONTEXT_MENU_KILL_PROCESS_ID, Menu.NONE, getResources().getString(R.string.action_kill_process, getCurrentSession().getPid())).setEnabled(currentSession.isRunning());
+        menu.add(Menu.NONE, CONTEXT_MENU_KILL_PROCESS_ID, Menu.NONE, getResources().getString(R.string.action_kill_process, currentSession.getPid())).setEnabled(currentSession.isRunning());
         menu.add(Menu.NONE, CONTEXT_MENU_STYLING_ID, Menu.NONE, R.string.action_style_terminal);
         menu.add(Menu.NONE, CONTEXT_MENU_TOGGLE_KEEP_SCREEN_ON, Menu.NONE, R.string.action_toggle_keep_screen_on).setCheckable(true).setChecked(mPreferences.shouldKeepScreenOn());
         menu.add(Menu.NONE, CONTEXT_MENU_HELP_ID, Menu.NONE, R.string.action_open_help);
@@ -696,29 +710,42 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     /** Hook system menu to show context menu instead. */
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        mTerminalView.showContextMenu();
+        TerminalView terminalView = getTerminalView();
+        if (terminalView != null) terminalView.showContextMenu();
         return false;
     }
 
     @Override
     public boolean onContextItemSelected(MenuItem item) {
-        TerminalSession session = getCurrentSession();
+        // god-termux: act on the pane the context menu was opened on
+        TerminalView terminalView = getTerminalView();
+        ContextMenuInfo info = item.getMenuInfo();
+        if (info instanceof ContextMenuInfo.AdapterContextMenuInfo) {
+            View target = ((ContextMenuInfo.AdapterContextMenuInfo) info).targetView;
+            if (target instanceof TerminalView) terminalView = (TerminalView) target;
+        }
+        TerminalSession session = terminalView != null ? terminalView.getCurrentSession() : getCurrentSession();
+        TermuxTerminalViewClient viewClient = getTermuxTerminalViewClient();
+        if (mPanes != null && terminalView != null) {
+            PaneView pane = mPanes.paneForView(terminalView);
+            if (pane != null) viewClient = pane.getClient();
+        }
 
         switch (item.getItemId()) {
             case CONTEXT_MENU_SELECT_URL_ID:
-                mTermuxTerminalViewClient.showUrlSelection();
+                viewClient.showUrlSelection();
                 return true;
             case CONTEXT_MENU_SHARE_TRANSCRIPT_ID:
-                mTermuxTerminalViewClient.shareSessionTranscript();
+                viewClient.shareSessionTranscript();
                 return true;
             case CONTEXT_MENU_SHARE_SELECTED_TEXT:
-                mTermuxTerminalViewClient.shareSelectedText();
+                viewClient.shareSelectedText();
                 return true;
             case CONTEXT_MENU_AUTOFILL_USERNAME:
-                mTerminalView.requestAutoFillUsername();
+                if (terminalView != null) terminalView.requestAutoFillUsername();
                 return true;
             case CONTEXT_MENU_AUTOFILL_PASSWORD:
-                mTerminalView.requestAutoFillPassword();
+                if (terminalView != null) terminalView.requestAutoFillPassword();
                 return true;
             case CONTEXT_MENU_RESET_TERMINAL_ID:
                 onResetTerminalSession(session);
@@ -739,7 +766,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                 ActivityUtils.startActivity(this, new Intent(this, SettingsActivity.class));
                 return true;
             case CONTEXT_MENU_REPORT_ID:
-                mTermuxTerminalViewClient.reportIssueFromTranscript();
+                viewClient.reportIssueFromTranscript();
                 return true;
             default:
                 return super.onContextItemSelected(item);
@@ -750,7 +777,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     public void onContextMenuClosed(Menu menu) {
         super.onContextMenuClosed(menu);
         // onContextMenuClosed() is triggered twice if back button is pressed to dismiss instead of tap for some reason
-        mTerminalView.onContextMenuClosed(menu);
+        if (mPanes != null)
+            for (TerminalView view : mPanes.allViews()) view.onContextMenuClosed(menu);
     }
 
     private void showKillSessionDialog(TerminalSession session) {
@@ -773,7 +801,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             showToast(getResources().getString(R.string.msg_terminal_reset), true);
 
             if (mTermuxTerminalSessionActivityClient != null)
-                mTermuxTerminalSessionActivityClient.onResetTerminalSession();
+                mTermuxTerminalSessionActivityClient.onResetTerminalSession(session);
         }
     }
 
@@ -792,13 +820,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         }
     }
     private void toggleKeepScreenOn() {
-        if (mTerminalView.getKeepScreenOn()) {
-            mTerminalView.setKeepScreenOn(false);
-            mPreferences.setKeepScreenOn(false);
-        } else {
-            mTerminalView.setKeepScreenOn(true);
-            mPreferences.setKeepScreenOn(true);
-        }
+        TerminalView terminalView = getTerminalView();
+        if (terminalView == null) return;
+        // god-termux: keep-screen-on applies to all split panes
+        boolean keepScreenOn = !terminalView.getKeepScreenOn();
+        for (TerminalView view : mPanes.allViews()) view.setKeepScreenOn(keepScreenOn);
+        mPreferences.setKeepScreenOn(keepScreenOn);
     }
 
 
@@ -940,7 +967,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
 
     public void termuxSessionListNotifyUpdated() {
-        mTermuxSessionListViewController.notifyDataSetChanged();
+        if (mTermuxSessionListViewController != null)
+            mTermuxSessionListViewController.notifyDataSetChanged();
     }
 
     public boolean isVisible() {
@@ -961,12 +989,20 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         return mTermuxService;
     }
 
+    /** god-termux: legacy API — the focused pane's terminal view. */
     public TerminalView getTerminalView() {
-        return mTerminalView;
+        return mPanes == null ? null : mPanes.focusedView();
     }
 
+    /** god-termux: legacy API — the focused pane's view client. */
     public TermuxTerminalViewClient getTermuxTerminalViewClient() {
-        return mTermuxTerminalViewClient;
+        if (mPanes == null) return null;
+        PaneView pane = mPanes.focused();
+        return pane == null ? null : pane.getClient();
+    }
+
+    public PaneManager getPaneManager() {
+        return mPanes;
     }
 
     public TermuxTerminalSessionActivityClient getTermuxTerminalSessionClient() {
@@ -975,10 +1011,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
     @Nullable
     public TerminalSession getCurrentSession() {
-        if (mTerminalView != null)
-            return mTerminalView.getCurrentSession();
-        else
-            return null;
+        TerminalView terminalView = getTerminalView();
+        return terminalView != null ? terminalView.getCurrentSession() : null;
     }
 
     public TermuxAppSharedPreferences getPreferences() {
@@ -1064,14 +1098,17 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setMargins();
         setTerminalToolbarHeight();
+        setSplitScreenButtonView();
 
         FileReceiverActivity.updateFileReceiverActivityComponentsState(this);
 
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onReloadActivityStyling();
 
-        if (mTermuxTerminalViewClient != null)
-            mTermuxTerminalViewClient.onReloadActivityStyling();
+        if (mPanes != null) {
+            mPanes.onReloadActivityStyling();
+            mPanes.updateChrome();
+        }
 
         // To change the activity and drawer theme, activity needs to be recreated.
         // It will destroy the activity, including all stored variables and views, and onCreate()

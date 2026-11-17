@@ -181,6 +181,26 @@ public class TermuxAppSharedPreferences extends AppSharedPreferences {
 
 
 
+    /** god-termux: persisted split screen layout (JSON string). */
+    public String getSplitLayout() {
+        return SharedPreferenceUtils.getString(mSharedPreferences, TERMUX_APP.KEY_SPLIT_LAYOUT, null, true);
+    }
+
+    public void setSplitLayout(String value) {
+        SharedPreferenceUtils.setString(mSharedPreferences, TERMUX_APP.KEY_SPLIT_LAYOUT, value, false);
+    }
+
+    /** god-termux: whether split pane titles are shown. */
+    public boolean shouldShowPaneTitles() {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_SHOW_PANE_TITLES, TERMUX_APP.DEFAULT_VALUE_SHOW_PANE_TITLES);
+    }
+
+    public void setShowPaneTitles(boolean value) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_SHOW_PANE_TITLES, value, false);
+    }
+
+
+
     public int getLogLevel() {
         return SharedPreferenceUtils.getInt(mSharedPreferences, TERMUX_APP.KEY_LOG_LEVEL, Logger.DEFAULT_LOG_LEVEL);
     }

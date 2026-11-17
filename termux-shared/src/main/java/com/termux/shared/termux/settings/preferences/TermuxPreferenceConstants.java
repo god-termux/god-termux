@@ -138,6 +138,18 @@ public final class TermuxPreferenceConstants {
 
 
         /**
+         * god-termux: defines the key for the persisted split screen layout (JSON: tree + session handles + focus).
+         */
+        public static final String KEY_SPLIT_LAYOUT = "split_layout";
+
+        /**
+         * god-termux: defines the key for whether split pane titles are shown.
+         */
+        public static final String KEY_SHOW_PANE_TITLES = "show_pane_titles";
+        public static final boolean DEFAULT_VALUE_SHOW_PANE_TITLES = true;
+
+
+        /**
          * Defines the key for current log level.
          */
         public static final String KEY_LOG_LEVEL = "log_level";

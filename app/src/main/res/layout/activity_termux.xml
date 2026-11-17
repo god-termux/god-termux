@@ -23,15 +23,11 @@
             android:layout_above="@+id/toolbar_nav"
             android:layout_height="match_parent">
 
-            <com.termux.view.TerminalView
-                android:id="@+id/terminal_view"
+            <!-- god-termux: split screen — up to 4 terminal panes laid out by a draggable split tree -->
+            <com.termux.mod.split.SplitLayout
+                android:id="@+id/split_layout"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:defaultFocusHighlightEnabled="false"
-                android:focusableInTouchMode="true"
-                android:scrollbarThumbVertical="@drawable/terminal_scroll_shape"
-                android:scrollbars="vertical"
-                tools:ignore="UnusedAttribute" />
+                android:layout_height="match_parent" />
 
             <LinearLayout
                 android:id="@+id/left_drawer"
@@ -65,6 +61,16 @@
                         android:textSize="22sp"
                         android:textStyle="bold"
                         tools:ignore="HardcodedText" />
+
+                    <ImageButton
+                        android:id="@+id/split_screen_button"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:padding="10dp"
+                        android:src="@drawable/god_ic_split"
+                        android:background="@drawable/god_icon_button_bg"
+                        android:contentDescription="@string/action_split_screen"
+                        app:tint="?attr/termuxActivityDrawerImageTint" />
 
                     <ImageButton
                         android:id="@+id/settings_button"
