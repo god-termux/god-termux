@@ -15,11 +15,22 @@ public final class GodRuntime {
         File prefix = new File(app.getFilesDir(), "usr");
         if (!new File(prefix, "bin").isDirectory()) return;      // bootstrap not extracted yet; called again at next start
         try {
-            copyTree(app, ROOT, prefix);
+            copyTree(app, ROOT + "/bin", new File(prefix, "bin"));
+            copyTree(app, ROOT + "/etc", new File(prefix, "etc"));
+            copyShim(app, prefix);
             File shim = new File(prefix, "glibc/shim");
             link(new File(prefix, "bin/dapt-get"), "dapt"); link(new File(prefix, "bin/dapt-cache"), "dapt");
             if (verifyShim(shim)) new File(shim, ".ok").createNewFile(); else new File(shim, ".ok").delete();
         } catch (Throwable t) { Log.e(TAG, "init failed", t); }
+    }
+
+    /** god-termux: Gradle builds ship the shim per ABI (glibc/shim/&lt;abi&gt;); build-local.sh ships a flat arm64 shim. */
+    static void copyShim(Application app, File prefix) throws IOException {
+        String[] abis = android.os.Build.SUPPORTED_ABIS;
+        String perAbi = ROOT + "/glibc/shim/" + (abis.length > 0 ? abis[0] : "");
+        String[] names = app.getAssets().list(perAbi);
+        if (names != null && names.length > 0) copyTree(app, perAbi, new File(prefix, "glibc/shim"));
+        else copyTree(app, ROOT + "/glibc/shim", new File(prefix, "glibc/shim"));
     }
 
     static void copyTree(Application app, String assetDir, File dest) throws IOException {
