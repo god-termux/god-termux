@@ -26,6 +26,15 @@ public final class SplitLayout extends ViewGroup {
     private final List<Divider> mDividers = new ArrayList<>();
     private final Paint mDividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private Divider mDrag;
+
+    // pane drag & drop (docking): the dragged pane, the pane under the finger and the snap zone
+    private PaneView mDragSrc, mDropTarget;
+    private int mDropZone = -1;
+    private float mDragX, mDragY;
+    private final Paint mDropFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mDropStroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mGhostFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mGhostText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final int mDividerPx, mZonePx, mMinPanePx;
 
     private static final class Divider {
@@ -46,6 +55,14 @@ public final class SplitLayout extends ViewGroup {
         mZonePx = Math.round(TOUCH_ZONE_DP * dp);
         mMinPanePx = Math.round(MIN_PANE_DP * dp);
         mDividerPaint.setColor(0x66888888);
+        mDropFill.setStyle(Paint.Style.FILL);
+        mDropStroke.setStyle(Paint.Style.STROKE);
+        mDropStroke.setStrokeWidth(2 * dp);
+        mGhostFill.setColor(0xEE263238);
+        mGhostText.setColor(0xFFFFFFFF);
+        mGhostText.setTextSize(13 * dp);
+        mGhostText.setTextAlign(Paint.Align.CENTER);
+        setWillNotDraw(false);
     }
 
     public void setTree(SplitNode root) {
@@ -182,6 +199,73 @@ public final class SplitLayout extends ViewGroup {
         }
     }
 
+    public void beginDrag(PaneView src) {
+        mDragSrc = src;
+        mDropTarget = null;
+        mDropZone = -1;
+        src.setAlpha(0.45f);
+        invalidate();
+    }
+
+    /** Update the drag from raw screen coordinates: find the pane under the finger and its snap zone. */
+    public void updateDrag(float rawX, float rawY) {
+        if (mDragSrc == null) return;
+        int[] loc = new int[2];
+        getLocationOnScreen(loc);
+        mDragX = rawX - loc[0];
+        mDragY = rawY - loc[1];
+        mDropTarget = null;
+        mDropZone = -1;
+        for (int i = 0; i < getChildCount(); i++) {
+            PaneView pane = (PaneView) getChildAt(i);
+            if (pane == mDragSrc || pane.getWidth() <= 0 || pane.getHeight() <= 0) continue;
+            if (mDragX >= pane.getLeft() && mDragX < pane.getRight() && mDragY >= pane.getTop() && mDragY < pane.getBottom()) {
+                mDropTarget = pane;
+                mDropZone = SplitNode.zoneFor((mDragX - pane.getLeft()) / pane.getWidth(), (mDragY - pane.getTop()) / pane.getHeight());
+                break;
+            }
+        }
+        invalidate();
+    }
+
+    public PaneView getDragSource() {
+        return mDragSrc;
+    }
+
+    public PaneView getDropTarget() {
+        return mDropTarget;
+    }
+
+    public int getDropZone() {
+        return mDropZone;
+    }
+
+    public void endDrag() {
+        if (mDragSrc != null) mDragSrc.setAlpha(1f);
+        mDragSrc = null;
+        mDropTarget = null;
+        mDropZone = -1;
+        invalidate();
+    }
+
+    public boolean isDragging() {
+        return mDragSrc != null;
+    }
+
+    /** The area the dragged pane would occupy if dropped now (half of the target for an edge, all of it for the centre). */
+    private RectF dropPreview() {
+        PaneView t = mDropTarget;
+        RectF r = new RectF(t.getLeft(), t.getTop(), t.getRight(), t.getBottom());
+        switch (mDropZone) {
+            case SplitNode.ZONE_LEFT: r.right = r.left + r.width() / 2f; break;
+            case SplitNode.ZONE_RIGHT: r.left = r.left + r.width() / 2f; break;
+            case SplitNode.ZONE_TOP: r.bottom = r.top + r.height() / 2f; break;
+            case SplitNode.ZONE_BOTTOM: r.top = r.top + r.height() / 2f; break;
+            default: break;
+        }
+        return r;
+    }
+
     /** god-termux: lets RadialGesture ignore taps that land on a divider (window coordinates). */
     public boolean isOverDivider(float windowX, float windowY) {
         int[] loc = new int[2];
@@ -192,6 +276,7 @@ public final class SplitLayout extends ViewGroup {
     @Override
     protected void dispatchDraw(Canvas canvas) {
         super.dispatchDraw(canvas);
+        drawDragOverlay(canvas);
         if (mDividers.isEmpty()) return;
         float radius = mDividerPx / 2f;
         for (Divider divider : mDividers) {
@@ -200,6 +285,32 @@ public final class SplitLayout extends ViewGroup {
             else bar.inset(mDividerPx * 0.15f, mDividerPx * 0.3f);
             canvas.drawRoundRect(bar, radius, radius, mDividerPaint);
         }
+    }
+
+
+    private void drawDragOverlay(Canvas canvas) {
+        if (mDragSrc == null) return;
+        float dp = getResources().getDisplayMetrics().density;
+        if (mDropTarget != null) {
+            int color = mDragSrc.getPaneColor();
+            RectF preview = dropPreview();
+            preview.inset(3 * dp, 3 * dp);
+            mDropFill.setColor(color);
+            mDropFill.setAlpha(90);
+            mDropStroke.setColor(color);
+            canvas.drawRoundRect(preview, 6 * dp, 6 * dp, mDropFill);
+            canvas.drawRoundRect(preview, 6 * dp, 6 * dp, mDropStroke);
+        }
+        CharSequence title = mDragSrc.getTitleText();
+        String label = (mDropZone == SplitNode.ZONE_CENTER ? "⇆ " : "") + (title == null || title.length() == 0 ? "bash" : title);
+        float w = Math.min(getWidth() - 8 * dp, Math.max(90 * dp, mGhostText.measureText(label) + 24 * dp)), h = 30 * dp;
+        float cx = Math.max(w / 2f + 4 * dp, Math.min(getWidth() - w / 2f - 4 * dp, mDragX));
+        float cy = Math.max(h / 2f, Math.min(getHeight() - h / 2f, mDragY - 36 * dp));
+        RectF ghost = new RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f);
+        canvas.drawRoundRect(ghost, 8 * dp, 8 * dp, mGhostFill);
+        mDropStroke.setColor(mDragSrc.getPaneColor());
+        canvas.drawRoundRect(ghost, 8 * dp, 8 * dp, mDropStroke);
+        canvas.drawText(label, cx, cy + mGhostText.getTextSize() * 0.35f, mGhostText);
     }
 
 }

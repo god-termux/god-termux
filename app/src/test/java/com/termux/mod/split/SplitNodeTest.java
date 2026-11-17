@@ -19,6 +19,56 @@ public class SplitNodeTest {
     }
 
     @Test
+    public void testZoneFor() {
+        Assert.assertEquals(SplitNode.ZONE_CENTER, SplitNode.zoneFor(0.5f, 0.5f));
+        Assert.assertEquals(SplitNode.ZONE_LEFT, SplitNode.zoneFor(0.05f, 0.5f));
+        Assert.assertEquals(SplitNode.ZONE_RIGHT, SplitNode.zoneFor(0.95f, 0.4f));
+        Assert.assertEquals(SplitNode.ZONE_TOP, SplitNode.zoneFor(0.5f, 0.1f));
+        Assert.assertEquals(SplitNode.ZONE_BOTTOM, SplitNode.zoneFor(0.6f, 0.9f));
+        // corner: nearest edge wins
+        Assert.assertEquals(SplitNode.ZONE_LEFT, SplitNode.zoneFor(0.1f, 0.2f));
+        Assert.assertEquals(SplitNode.ZONE_TOP, SplitNode.zoneFor(0.2f, 0.1f));
+    }
+
+    @Test
+    public void testDockSidesAndSwap() {
+        // 0 | 1  -> dock 0 on the bottom of 1  => 1 / 0
+        SplitNode root = SplitNode.leaf(0);
+        root.split(0, SplitNode.HORIZONTAL, 1, 4);
+        Assert.assertTrue(root.dock(0, 1, SplitNode.ZONE_BOTTOM));
+        Assert.assertEquals(2, root.leafCount());
+        Assert.assertEquals(SplitNode.VERTICAL, root.orientation);
+        Assert.assertEquals(Arrays.asList(1, 0), root.leafIds());
+
+        // dock back on the left of 1 => 0 | 1
+        Assert.assertTrue(root.dock(0, 1, SplitNode.ZONE_LEFT));
+        Assert.assertEquals(SplitNode.HORIZONTAL, root.orientation);
+        Assert.assertEquals(Arrays.asList(0, 1), root.leafIds());
+
+        // centre = swap
+        Assert.assertTrue(root.dock(0, 1, SplitNode.ZONE_CENTER));
+        Assert.assertEquals(Arrays.asList(1, 0), root.leafIds());
+
+        // same pane / missing pane: unchanged
+        Assert.assertFalse(root.dock(1, 1, SplitNode.ZONE_LEFT));
+        Assert.assertFalse(root.dock(1, 9, SplitNode.ZONE_LEFT));
+        Assert.assertEquals(Arrays.asList(1, 0), root.leafIds());
+    }
+
+    @Test
+    public void testDockKeepsAllPanesInThreePaneTree() {
+        SplitNode root = SplitNode.leaf(0);
+        root.split(0, SplitNode.HORIZONTAL, 1, 4);
+        root.split(1, SplitNode.VERTICAL, 2, 4);      // 0 | (1 / 2)
+        Assert.assertTrue(root.dock(0, 2, SplitNode.ZONE_RIGHT)); // (1 / (2 | 0))
+        Assert.assertEquals(3, root.leafCount());
+        Assert.assertTrue(root.leafIds().containsAll(Arrays.asList(0, 1, 2)));
+        Assert.assertEquals(Arrays.asList(1, 2, 0), root.leafIds());
+        // a single leaf cannot be docked
+        Assert.assertFalse(SplitNode.leaf(0).dock(0, 1, SplitNode.ZONE_LEFT));
+    }
+
+    @Test
     public void testSplit() {
         SplitNode root = SplitNode.leaf(0);
         SplitNode fresh = root.split(0, SplitNode.HORIZONTAL, 1, 4);

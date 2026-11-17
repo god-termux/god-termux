@@ -234,6 +234,29 @@ public final class PaneManager {
         return changed;
     }
 
+    /** Pane drag & drop: the pane header starts a drag, the layout tracks the snap zone, the drop re-docks the pane. */
+    public void startDrag(PaneView pane) {
+        mLayout.beginDrag(pane);
+    }
+
+    public void dragTo(float rawX, float rawY) {
+        mLayout.updateDrag(rawX, rawY);
+    }
+
+    public void endDrag(boolean commit) {
+        PaneView target = mLayout.getDropTarget();
+        int zone = mLayout.getDropZone();
+        PaneView src = mLayout.getDragSource();
+        mLayout.endDrag();
+        if (!commit || src == null || target == null || zone < 0) return;
+        if (mTree.dock(src.paneId, target.paneId, zone)) {
+            mLayout.setTree(mTree);
+            updateChrome();
+            focus(src);
+            saveState();
+        }
+    }
+
     public void swapWithNeighbor(PaneView pane) {
         PaneView neighbor = neighbor(pane, -1);
         if (neighbor == null) return;

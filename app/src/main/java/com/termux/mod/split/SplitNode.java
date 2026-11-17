@@ -103,6 +103,40 @@ public final class SplitNode {
         return sibling;
     }
 
+    public static final int ZONE_LEFT = 0, ZONE_RIGHT = 1, ZONE_TOP = 2, ZONE_BOTTOM = 3, ZONE_CENTER = 4;
+
+    /** Drop zone for a point inside a pane, given as fractions (0..1) of its width/height: nearest edge band, or the centre box. */
+    public static int zoneFor(float fx, float fy) {
+        if (fx > 0.28f && fx < 0.72f && fy > 0.28f && fy < 0.72f) return ZONE_CENTER;
+        float left = fx, right = 1f - fx, top = fy, bottom = 1f - fy;
+        float min = Math.min(Math.min(left, right), Math.min(top, bottom));
+        if (min == left) return ZONE_LEFT;
+        if (min == right) return ZONE_RIGHT;
+        if (min == top) return ZONE_TOP;
+        return ZONE_BOTTOM;
+    }
+
+    /**
+     * Move the leaf {@code srcId} next to the leaf {@code dstId}: docked on the given side of it
+     * (it takes half of dst's space), or swapped with it for {@link #ZONE_CENTER}.
+     * Returns false (tree unchanged) if either pane is missing or they are the same.
+     */
+    public boolean dock(int srcId, int dstId, int zone) {
+        if (srcId == dstId || findLeaf(srcId) == null || findLeaf(dstId) == null) return false;
+        if (zone == ZONE_CENTER) { swapPanes(srcId, dstId); return true; }
+        if (close(srcId) == null) return false;
+        SplitNode target = findLeaf(dstId);
+        boolean horizontal = zone == ZONE_LEFT || zone == ZONE_RIGHT;
+        boolean srcFirst = zone == ZONE_LEFT || zone == ZONE_TOP;
+        SplitNode old = leaf(dstId), moved = leaf(srcId);
+        target.paneId = -1;
+        target.orientation = horizontal ? HORIZONTAL : VERTICAL;
+        target.ratio = 0.5f;
+        target.a = srcFirst ? moved : old;
+        target.b = srcFirst ? old : moved;
+        return true;
+    }
+
     /** Exchange the pane ids of two leaves (used when a session moves between panes). */
     public void swapPanes(int id1, int id2) {
         SplitNode first = findLeaf(id1), second = findLeaf(id2);
