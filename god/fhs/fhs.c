@@ -17,6 +17,15 @@
 #include <dirent.h>
 #include <signal.h>
 
+/* god-termux: 32-bit archs (armv7, x86) name this syscall fstatat64, not newfstatat */
+#ifndef SYS_newfstatat
+#ifdef SYS_fstatat64
+#define SYS_newfstatat SYS_fstatat64
+#else
+#define SYS_newfstatat __NR_fstatat64
+#endif
+#endif
+
 #define LDSO GLIB "/lib/ld-linux-aarch64.so.1"
 #define SHIM_G GLIB "/shim/libfhs-glibc.so"
 #define SHIM_B GLIB "/shim/libfhs-bionic.so"

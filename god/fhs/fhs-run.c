@@ -20,6 +20,24 @@ extern char** environ;
 #ifndef __NR_renameat
 #define __NR_renameat 38
 #endif
+/* god-termux: 32-bit archs (armv7, x86) name this syscall fstatat64, not newfstatat */
+#ifndef __NR_newfstatat
+#ifdef __NR_fstatat64
+#define __NR_newfstatat __NR_fstatat64
+#endif
+#endif
+/* god-termux: supervise the native arch of this build, not only aarch64 */
+#if defined(__aarch64__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#elif defined(__arm__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_ARM
+#elif defined(__x86_64__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_X86_64
+#elif defined(__i386__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_I386
+#else
+#define FHS_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#endif
 static const int NRS[] = {__NR_openat, __NR_newfstatat, __NR_faccessat, __NR_faccessat2, __NR_readlinkat, __NR_statx,
   __NR_mkdirat, __NR_unlinkat, __NR_symlinkat, __NR_linkat, __NR_renameat, __NR_renameat2, __NR_fchmodat, __NR_fchownat, __NR_utimensat};
 #define NN (sizeof NRS / sizeof NRS[0])
@@ -118,7 +136,7 @@ int main(int argc, char** argv) {
   close(sp[1]); prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
   struct sock_filter f[2 + NN * 2 + 2]; int k = 0;
   f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
-  f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0);
+  f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, FHS_AUDIT_ARCH, 1, 0);
   f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
   for (unsigned i = 0; i < NN; i++) { f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NRS[i], 0, 1); f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF); }
