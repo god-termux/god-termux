@@ -720,8 +720,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         // god-termux: act on the pane the context menu was opened on
         TerminalView terminalView = getTerminalView();
         ContextMenuInfo info = item.getMenuInfo();
-        if (info instanceof ContextMenuInfo.AdapterContextMenuInfo) {
-            View target = ((ContextMenuInfo.AdapterContextMenuInfo) info).targetView;
+        if (info instanceof android.widget.AdapterView.AdapterContextMenuInfo) {
+            View target = ((android.widget.AdapterView.AdapterContextMenuInfo) info).targetView;
             if (target instanceof TerminalView) terminalView = (TerminalView) target;
         }
         TerminalSession session = terminalView != null ? terminalView.getCurrentSession() : getCurrentSession();
