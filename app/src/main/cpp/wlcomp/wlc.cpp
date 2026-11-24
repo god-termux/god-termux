@@ -8,6 +8,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <map>
 #include <vector>
 #include <fcntl.h>
 #include <math.h>
@@ -32,13 +33,14 @@ struct XSurf {
   bool acked = false, cfg_sent = false; int gx = 0, gy = 0; XSurf* parent = nullptr; Pos pos; int rx = 0, ry = 0;
 };
 struct Ev { int t; float a, b; int i; };
-enum { E_MOTION, E_BUTTON, E_AXIS, E_KEY, E_CHAR, E_CYCLE };
+enum { E_MOTION, E_BUTTON, E_AXIS, E_KEY, E_CHAR, E_CYCLE, E_TDOWN, E_TMOVE, E_TUP, E_TCANCEL };
 std::atomic<int> g_count{0};
 
 wl_display* dpy; wl_event_loop* loop;
 int OW = 1080, OH = 2392, SCALE = 2, NEXT_ID = 1; uint32_t serial_ = 1;
 std::vector<Surf*> order; std::set<Surf*> alive;
 std::vector<wl_resource*> outputs, pointers, keyboards;
+std::vector<wl_resource*> touches; std::map<int, Surf*> touch_focus;   // wl_touch resources; touch id -> surface that received "down"
 Surf *ptr_focus = nullptr, *kbd_focus = nullptr; float cur_x = 0, cur_y = 0;
 std::deque<Ev> queue; std::mutex qm;
 int keymap_fd = -1; uint32_t keymap_size = 0; uint32_t mods_dep = 0;   // modifier mask: Shift=1 Control=4 Alt(Mod1)=8 Super(Mod4)=64
@@ -372,11 +374,11 @@ void seat_keyboard(wl_client* c, wl_resource* r, uint32_t id) {
   wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keymap_fd, keymap_size);
   if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) wl_keyboard_send_repeat_info(k, 30, 400);
 }
-void seat_touch(wl_client* c, wl_resource* r, uint32_t id) { wl_resource* t = wl_resource_create(c, &wl_touch_interface, wl_resource_get_version(r), id); wl_resource_set_implementation(t, &touch_impl, nullptr, nullptr); }
+void seat_touch(wl_client* c, wl_resource* r, uint32_t id) { wl_resource* t = wl_resource_create(c, &wl_touch_interface, wl_resource_get_version(r), id); wl_resource_set_implementation(t, &touch_impl, nullptr, [](wl_resource* x) { touches.erase(std::remove(touches.begin(), touches.end(), x), touches.end()); }); touches.push_back(t); }
 const struct wl_seat_interface seat_impl = {seat_pointer, seat_keyboard, seat_touch, rel};
 void seat_bind(wl_client* c, void*, uint32_t v, uint32_t id) {
   wl_resource* r = wl_resource_create(c, &wl_seat_interface, v > 5 ? 5 : v, id); wl_resource_set_implementation(r, &seat_impl, nullptr, nullptr);
-  wl_seat_send_capabilities(r, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
+  wl_seat_send_capabilities(r, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_TOUCH);
   if (v >= WL_SEAT_NAME_SINCE_VERSION) wl_seat_send_name(r, "seat0");
 }
 
@@ -393,12 +395,39 @@ void ddm_device(wl_client* c, wl_resource* r, uint32_t id, wl_resource*) { wl_re
 const struct wl_data_device_manager_interface ddm_impl = {ddm_source, ddm_device, rel};
 void ddm_bind(wl_client* c, void*, uint32_t v, uint32_t id) { wl_resource* r = wl_resource_create(c, &wl_data_device_manager_interface, v > 3 ? 3 : v, id); wl_resource_set_implementation(r, &ddm_impl, nullptr, nullptr); }
 
+void touch_frame_all(wl_client* c) { each_res(touches, c, [&](wl_resource* r) { wl_touch_send_frame(r); }); }
+void on_touch(int type, int id, float lx, float ly) {
+  if (type == E_TDOWN) {
+    dismiss_popups_if_outside();
+    float sx = 0, sy = 0; Surf* t = hit(lx, ly, &sx, &sy); if (!t) return;
+    if (!t->popup) kbd_set_focus(root_of(t));
+    touch_focus[id] = t;
+    each_res(touches, t->client, [&](wl_resource* r) { wl_touch_send_down(r, serial_++, now_ms(), t->res, id, wl_fixed_from_double(sx), wl_fixed_from_double(sy)); });
+    touch_frame_all(t->client); return;
+  }
+  auto it = touch_focus.find(id); if (it == touch_focus.end()) return;
+  Surf* t = it->second;
+  if (!alive.count(t)) { touch_focus.erase(it); return; }
+  if (type == E_TMOVE) {
+    float sx = lx - t->x, sy = ly - t->y;
+    each_res(touches, t->client, [&](wl_resource* r) { wl_touch_send_motion(r, now_ms(), id, wl_fixed_from_double(sx), wl_fixed_from_double(sy)); });
+  } else if (type == E_TUP) {
+    each_res(touches, t->client, [&](wl_resource* r) { wl_touch_send_up(r, serial_++, now_ms(), id); });
+    touch_focus.erase(it);
+  } else {   // E_TCANCEL: cancel every active touch of that client
+    wl_client* c = t->client; each_res(touches, c, [&](wl_resource* r) { wl_touch_send_cancel(r); });
+    for (auto i = touch_focus.begin(); i != touch_focus.end();) { if (alive.count(i->second) && i->second->client == c) i = touch_focus.erase(i); else ++i; }
+  }
+  touch_frame_all(t->client);
+}
+
 void process(const Ev& e) {
   switch (e.t) {
     case E_MOTION: cur_x = e.a / SCALE; cur_y = e.b / SCALE; pointer_update(); break;
     case E_BUTTON: pointer_update(); on_button(e.i, e.a > 0); break;
     case E_AXIS: if (ptr_focus) each_res(pointers, ptr_focus->client, [&](wl_resource* r) { wl_pointer_send_axis(r, now_ms(), WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(e.a)); pointer_frame(r); }); break;
     case E_KEY: on_key(e.i, e.a > 0); break;
+    case E_TDOWN: case E_TMOVE: case E_TUP: case E_TCANCEL: on_touch(e.t, e.i, e.a / SCALE, e.b / SCALE); break;
     case E_CYCLE: { Surf* first = nullptr; int n = 0; for (Surf* x : order) if (!x->popup) { if (!first) first = x; n++; } if (n > 1) { int id = first->id; wlc_raise(id); } break; }
     case E_CHAR: { int code; bool sh; if (char_key(e.i, &code, &sh)) { if (sh) on_key(42, 1); on_key(code, 1); on_key(code, 0); if (sh) on_key(42, 0); } break; }
   }
@@ -467,6 +496,7 @@ void wlc_in_button(int b, int p) { push(Ev{E_BUTTON, (float)p, 0, b}); }
 void wlc_in_axis(float dy) { push(Ev{E_AXIS, dy, 0, 0}); }
 void wlc_in_key(int c, int p) { push(Ev{E_KEY, (float)p, 0, c}); }
 void wlc_in_char(int u) { push(Ev{E_CHAR, 0, 0, u}); }
+void wlc_in_touch(int phase, int id, float x, float y) { push(Ev{E_TDOWN + (phase < 0 ? 0 : phase > 3 ? 3 : phase), x, y, id}); }
 void wlc_in_cycle(void) { push(Ev{E_CYCLE, 0, 0, 0}); }
 int wlc_window_count(void) { return g_count; }
 int wlc_title(int id, char* out, int n) { for (Surf* s : order) if (s->id == id) { snprintf(out, n, "%s", s->title.c_str()); return (int)s->title.size(); } return -1; }

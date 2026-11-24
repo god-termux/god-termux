@@ -54,6 +54,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
     static native void nativeKey(int evdev, int pressed);
     static native void nativeChar(int c);
     static native void nativeCycle();
+    static native void nativeTouch(int phase, int id, float x, float y);
 
     private Activity act; private Ui ui; private WlPrefs p; private final Handler handler = new Handler(Looper.getMainLooper());
     private FrameLayout root, stage, box; private WlView view; private CursorView cursor; private TextView hint, menuBtn; private LinearLayout keybar, padButtons, menuCard;
@@ -222,7 +223,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
     private void refreshCosmicItem() { if (cosmicItem != null) cosmicItem.setText(cosmicLabel()); }
 
     // ------------------------------------------------------------------------------------------------ floating menu
-    private String modeLabel() { return "🖱  Режим: " + (p.touchMode == 1 ? "тачпад" : "прямое касание"); }
+    private String modeLabel() { return "🖱  Режим: " + (p.touchMode == 2 ? "мультитач (wl_touch)" : p.touchMode == 1 ? "тачпад" : "прямое касание"); }
 
     private void buildMenu() {
         menuBtn = ui.label("☰", 22, 0xFFFFFFFF, true); menuBtn.setGravity(Gravity.CENTER); menuBtn.setBackground(ui.rect(0x99101318, 24, 0x55FFFFFF)); menuBtn.setAlpha(0.7f);
@@ -243,7 +244,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         menuCard = new LinearLayout(act); menuCard.setOrientation(LinearLayout.VERTICAL); menuCard.setBackground(ui.rect(0xF2171A20, 16, 0x44FFFFFF)); menuCard.setPadding(ui.dp(6), ui.dp(6), ui.dp(6), ui.dp(6)); menuCard.setVisibility(View.GONE);
         menuCard.addView(menuItem("⚙  Настройки", new Runnable() { public void run() { openSettings(); } }));
         menuCard.addView(menuItem("⌨  Клавиатура", new Runnable() { public void run() { closeMenu(); toggleKeyboard(); } }));
-        modeItem = menuItem(modeLabel(), new Runnable() { public void run() { p.touchMode = 1 - p.touchMode; p.save(); applyPointer(); closeMenu(); } });
+        modeItem = menuItem(modeLabel(), new Runnable() { public void run() { p.touchMode = (p.touchMode + 1) % 3; p.save(); applyPointer(); closeMenu(); } });
         menuCard.addView(modeItem);
         cosmicItem = menuItem(cosmicLabel(), new Runnable() { public void run() { closeMenu(); toggleCosmic(); } });
         menuCard.addView(cosmicItem);
@@ -445,11 +446,27 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
             return super.onGenericMotionEvent(e);
         }
 
+        // ---- native multi-touch: every finger is a wl_touch point (COSMIC and GTK/Qt apps get real touch events)
+        private boolean nativeTouches(MotionEvent e) {
+            int a = e.getActionMasked(), idx = e.getActionIndex();
+            switch (a) {
+                case MotionEvent.ACTION_DOWN: case MotionEvent.ACTION_POINTER_DOWN:
+                    nativeTouch(0, e.getPointerId(idx), e.getX(idx) * kx(), e.getY(idx) * ky()); return true;
+                case MotionEvent.ACTION_MOVE:
+                    for (int i = 0; i < e.getPointerCount(); i++) nativeTouch(1, e.getPointerId(i), e.getX(i) * kx(), e.getY(i) * ky()); return true;
+                case MotionEvent.ACTION_UP: case MotionEvent.ACTION_POINTER_UP:
+                    nativeTouch(2, e.getPointerId(idx), e.getX(idx) * kx(), e.getY(idx) * ky()); return true;
+                case MotionEvent.ACTION_CANCEL: nativeTouch(3, e.getPointerId(0), 0, 0); return true;
+                default: return true;
+            }
+        }
+
         @Override public boolean onTouchEvent(MotionEvent e) {
             if (isMouse(e)) { if (p.mouseMode == 1) return true; return mouseTouch(e); }
             if (p.mouseMode == 2) return true;   // mouse-only mode: touches on the picture are ignored
-            if (p.touchMode == 0 && cursor.getVisibility() == View.VISIBLE) cursor.setVisibility(View.GONE);
-            if (e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 3) {   // three fingers: menu
+            if (p.touchMode != 1 && cursor.getVisibility() == View.VISIBLE) cursor.setVisibility(View.GONE);
+            if (p.touchMode == 2) return nativeTouches(e);
+            if (p.touchMode != 2 && e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 3) {   // three fingers: menu
                 handler.removeCallbacks(longPress); if (leftDown) { nativeButton(0, 0); leftDown = false; } toggleMenu(); return true; }
             if (p.touchMode == 1) return padTouch(e);
             float x = e.getX(), y = e.getY();

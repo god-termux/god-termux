@@ -30,6 +30,7 @@ void wlc_in_button(int btn, int pressed);       // btn: 0 left, 1 right, 2 middl
 void wlc_in_axis(float dy);                     // wheel, positive = scroll down
 void wlc_in_key(int evdev, int pressed);
 void wlc_in_char(int unicode);                  // US layout ASCII typed as key presses
+void wlc_in_touch(int phase, int id, float x, float y);   // phase: 0 down, 1 move, 2 up, 3 cancel; multi-touch (wl_touch)
 void wlc_in_cycle(void);                       // bring the oldest toplevel to the front (window switcher)
 int  wlc_window_count(void);                    // mapped toplevels (thread-safe)
 int  wlc_title(int id, char* out, int n);       // toplevel title (for a window switcher)

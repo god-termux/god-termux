@@ -286,6 +286,7 @@ JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeStop(JNIEnv*, jclass) { runnin
 JNIEXPORT jboolean JNICALL Java_wlcomp_WlScreen_nativeRunning(JNIEnv*, jclass) { return running ? JNI_TRUE : JNI_FALSE; }
 JNIEXPORT jint JNICALL Java_wlcomp_WlScreen_nativeWindows(JNIEnv*, jclass) { return running ? wlc_window_count() : 0; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeMotion(JNIEnv*, jclass, jfloat x, jfloat y) { wlc_in_motion(x, y); }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeTouch(JNIEnv*, jclass, jint phase, jint id, jfloat x, jfloat y) { wlc_in_touch(phase, id, x, y); }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeButton(JNIEnv*, jclass, jint b, jint p) { wlc_in_button(b, p); }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeAxis(JNIEnv*, jclass, jfloat dy) { wlc_in_axis(dy); }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeKey(JNIEnv*, jclass, jint k, jint p) { wlc_in_key(k, p); }

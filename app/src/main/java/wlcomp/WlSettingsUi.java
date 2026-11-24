@@ -74,8 +74,8 @@ final class WlSettingsUi {
         toggle("Замер производительности", "Непрерывная перерисовка без ограничения кадров; статистика в logcat (тег wlcomp) и tmp/wlcomp-render.log. Нагружает батарею", p.bench, new BoolSet() { public void set(boolean v) { p.bench = v; changed(false); } });
 
         section("Указатель");
-        choice("Режим касаний", new String[] {"Прямое касание (как мышь под пальцем)", "Тачпад (весь экран — тачпад)"}, p.touchMode, new IntSet() { public void set(int v) { p.touchMode = v; ptr(true); } },
-            "Прямое: тап — клик, долгое нажатие — правая кнопка, два пальца — прокрутка");
+        choice("Режим касаний", new String[] {"Прямое касание (как мышь под пальцем)", "Тачпад (весь экран — тачпад)", "Мультитач (пальцы передаются программам как касания)"}, p.touchMode, new IntSet() { public void set(int v) { p.touchMode = v; ptr(true); } },
+            "Прямое: тап — клик, долгое нажатие — правая кнопка, два пальца — прокрутка. Мультитач: настоящие касания для COSMIC и программ с поддержкой touch; меню открывается кнопкой ☰");
         if (p.touchMode == 1) {
             slider10("Скорость курсора", 0.3f, 4f, p.sens, new FloatSet() { public void set(float v) { p.sens = v; ptr(false); } });
             toggle("Ускорение", "Быстрое движение пальца двигает курсор дальше", p.accel, new BoolSet() { public void set(boolean v) { p.accel = v; ptr(false); } });
