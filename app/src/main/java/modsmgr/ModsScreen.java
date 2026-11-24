@@ -59,7 +59,7 @@ public class ModsScreen implements ModScreen {
                 try { i.icon = (String) f(e, "icon"); i.note = (String) f(e, "note"); } catch (Throwable ignored) {}
                 i.enabled = !off.contains(i.name);
                 i.loaded = (Boolean) ModLoader.class.getMethod("builtinLoaded", String.class).invoke(null, i.name);
-                r.add(i); }
+                if (!"modsmgr".equals(i.name)) r.add(i); }   // the manager does not list itself
         } catch (Throwable t) { /* running as a plain external mod: no built-in registry */ }
         return r;
     }
