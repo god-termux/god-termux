@@ -18,11 +18,21 @@ import com.termux.mod.ModScreen;
 import godui.Ui;
 import java.io.File;
 import java.lang.reflect.Field;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
 import java.util.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class ModsScreen implements ModScreen {
     Activity act; Ui ui; LinearLayout col; int listStart; File root; final Set<String> changed = new HashSet<>();
+    static final String CATALOG_URL = "https://god-termux.github.io/mods/index.json";
+    static final class Cat { String name, title, desc, icon, url, sha; int version; long size; }
+    List<Cat> catalog; String catStatus = "Каталог не загружен"; boolean catBusy; String catBase;
 
     public void onCreate(Activity a, Bundle b) {
         act = a; ui = new Ui(a); root = ModLoader.modsDir(a.getApplication());
@@ -30,7 +40,7 @@ public class ModsScreen implements ModScreen {
             ui.button("📁 Папка", false, new Runnable() { public void run() { openFolder(); } }),
             ui.button("⎘ Путь", false, new Runnable() { public void run() { copyPath(); } }),
             ui.button("↻ Рестарт", false, new Runnable() { public void run() { restart(); } }));
-        listStart = col.getChildCount(); refresh();
+        listStart = col.getChildCount(); refresh(); loadCatalog();
     }
 
     // ---- data -------------------------------------------------------------------------------------------------------
@@ -89,7 +99,120 @@ public class ModsScreen implements ModScreen {
             TextView s = ui.label("Положите папку с модом (mod.json, classes.dex, lib/) в папку модов и перезапустите Termux.", 13, ui.sub, false); s.setGravity(Gravity.CENTER); s.setPadding(0, ui.dp(4), 0, ui.dp(10)); e.addView(s);
             e.addView(ui.button("Открыть папку", false, new Runnable() { public void run() { openFolder(); } }));
         }
+        catalogSection();
     }
+
+    // ---- catalog (github.com/god-termux/mods) ----------------------------------------------------------------------
+    void catalogSection() {
+        ui.section(col, "Каталог модов");
+        LinearLayout c = ui.card(col);
+        c.addView(ui.label(catStatus, 13, ui.sub, false));
+        c.addView(ui.button(catBusy ? "Подождите…" : "↻ Обновить каталог", false, new Runnable() { public void run() { loadCatalog(); } }), ui.gap(8));
+        if (catalog == null) return;
+        for (final Cat m : catalog) {
+            int inst = installedVersion(m.name); boolean builtin = isBuiltin(m.name);
+            LinearLayout k = ui.card(col); LinearLayout top = new LinearLayout(act); top.setGravity(Gravity.CENTER_VERTICAL);
+            top.addView(ui.badge(m.icon));
+            LinearLayout mid = new LinearLayout(act); mid.setOrientation(LinearLayout.VERTICAL); mid.setPadding(ui.dp(12), 0, ui.dp(8), 0);
+            mid.addView(ui.label(m.title, 16, ui.text, true)); if (!m.desc.isEmpty()) mid.addView(ui.label(m.desc, 13, ui.sub, false));
+            String cs; int cc;
+            if (builtin) { cs = "Уже встроен в приложение"; cc = ui.sub; }
+            else if (inst < 0) { cs = "Не установлен · v" + m.version + " · " + (m.size / 1024 + 1) + " КБ"; cc = ui.sub; }
+            else if (inst < m.version) { cs = "Доступно обновление: v" + inst + " → v" + m.version; cc = ui.warn; }
+            else { cs = "Установлен · v" + inst; cc = ui.ok; }
+            if (changed.contains(m.name)) { cs = "Установлен, вступит в силу после перезапуска"; cc = ui.warn; }
+            TextView chip = ui.chip(cs, cc); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.topMargin = ui.dp(6); mid.addView(chip, lp);
+            top.addView(mid, new LinearLayout.LayoutParams(0, -2, 1)); k.addView(top);
+            if (!builtin && (inst < 0 || inst < m.version) && !catBusy)
+                k.addView(ui.button(inst < 0 ? "Установить" : "Обновить", true, new Runnable() { public void run() { confirmInstall(m); } }), ui.gap(12));
+        }
+    }
+
+    boolean isBuiltin(String n) { for (Item i : builtins()) if (i.name.equals(n)) return true; return false; }
+
+    int installedVersion(String name) {
+        try { return new JSONObject(readAll(new File(new File(root, name), "mod.json"))).optInt("version", 0); } catch (Throwable t) { return -1; }
+    }
+
+    String catalogUrl() {
+        try { File f = new File(act.getFilesDir(), "home/.termux/mods-catalog-url"); if (f.exists()) { String u = readAll(f).trim(); if (u.startsWith("https://")) return u; } } catch (Throwable ignored) {}
+        return CATALOG_URL;
+    }
+
+    static byte[] fetch(String url, long max) throws Exception {
+        if (!url.startsWith("https://")) throw new IOException("только https: " + url);
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(); c.setConnectTimeout(15000); c.setReadTimeout(30000);
+        c.setRequestProperty("User-Agent", "god-termux-mods");
+        if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
+        try (InputStream in = c.getInputStream()) { ByteArrayOutputStream o = new ByteArrayOutputStream(); byte[] b = new byte[8192]; int n;
+            while ((n = in.read(b)) > 0) { o.write(b, 0, n); if (o.size() > max) throw new IOException("слишком большой файл"); } return o.toByteArray(); }
+    }
+
+    void loadCatalog() {
+        if (catBusy) return; catBusy = true; catStatus = "Загрузка каталога…"; refresh();
+        new Thread(new Runnable() { public void run() {
+            String st; List<Cat> list = null;
+            try {
+                String url = catalogUrl(); JSONObject j = new JSONObject(new String(fetch(url, 1 << 20), "UTF-8"));
+                if (j.optInt("format") != 1) throw new IOException("неизвестный формат каталога");
+                list = new ArrayList<>(); JSONArray a = j.getJSONArray("mods");
+                for (int i = 0; i < a.length(); i++) { JSONObject o = a.getJSONObject(i); Cat m = new Cat();
+                    m.name = o.getString("name"); if (!m.name.matches("[a-z0-9][a-z0-9_-]{0,40}")) continue;
+                    m.title = o.optString("title", m.name); m.desc = o.optString("description", ""); m.icon = o.optString("icon", "🧩");
+                    m.url = o.getString("url"); m.sha = o.getString("sha256").toLowerCase(); m.version = o.getInt("version"); m.size = o.optLong("size", 0); list.add(m); }
+                st = "Каталог: " + list.size() + " " + (list.size() == 1 ? "мод" : "мода/модов") + " · " + url;
+            } catch (Throwable t) { st = "Каталог недоступен: " + t.getMessage(); list = null; }
+            final String fs = st; final List<Cat> fl = list;
+            act.runOnUiThread(new Runnable() { public void run() { catBusy = false; catStatus = fs; if (fl != null) catalog = fl; refresh(); } });
+        } }).start();
+    }
+
+    void confirmInstall(final Cat m) {
+        new android.app.AlertDialog.Builder(act).setTitle("Установить «" + m.title + "»?")
+            .setMessage("Мод — это код, который выполняется внутри Termux с его правами и доступом к его данным. Ставьте только то, чему доверяете.\n\nИсточник: " + m.url)
+            .setPositiveButton("Установить", new android.content.DialogInterface.OnClickListener() { public void onClick(android.content.DialogInterface d, int w) { install(m); } })
+            .setNegativeButton("Отмена", null).show();
+    }
+
+    void install(final Cat m) {
+        catBusy = true; catStatus = "Скачивание " + m.name + "…"; refresh();
+        new Thread(new Runnable() { public void run() {
+            String st;
+            try { installZip(m); changed.add(m.name); st = "«" + m.title + "» установлен (v" + m.version + "). Перезапустите Termux"; }
+            catch (Throwable t) { st = "Не удалось установить " + m.name + ": " + t.getMessage(); }
+            final String fs = st;
+            act.runOnUiThread(new Runnable() { public void run() { catBusy = false; catStatus = fs; refresh(); } });
+        } }).start();
+    }
+
+    void installZip(Cat m) throws Exception {
+        byte[] z = fetch(m.url, 64L << 20);
+        if (m.size > 0 && z.length != m.size) throw new IOException("размер не совпал с каталогом");
+        byte[] h = MessageDigest.getInstance("SHA-256").digest(z); StringBuilder hx = new StringBuilder(); for (byte b : h) hx.append(String.format("%02x", b));
+        if (!hx.toString().equals(m.sha)) throw new IOException("контрольная сумма не совпала");
+        File tmp = new File(root, "." + m.name + ".new"); deleteTree(tmp); if (!tmp.mkdirs()) throw new IOException("нет доступа к " + root);
+        try {
+            String tmpPath = tmp.getCanonicalPath() + File.separator; boolean hasJson = false; long total = 0;
+            try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(z))) {
+                ZipEntry e; while ((e = in.getNextEntry()) != null) {
+                    String n = e.getName(); if (e.isDirectory()) continue;
+                    if (!(n.equals("mod.json") || n.equals("classes.dex") || n.startsWith("lib/") || n.startsWith("assets/"))) throw new IOException("лишний файл в архиве: " + n);
+                    File out = new File(tmp, n); if (!out.getCanonicalPath().startsWith(tmpPath)) throw new IOException("недопустимый путь: " + n);
+                    out.getParentFile().mkdirs();
+                    try (OutputStream os = new FileOutputStream(out)) { byte[] b = new byte[8192]; int r; while ((r = in.read(b)) > 0) { total += r; if (total > (128L << 20)) throw new IOException("архив слишком велик"); os.write(b, 0, r); } }
+                    if (n.equals("mod.json")) hasJson = true;
+                }
+            }
+            if (!hasJson) throw new IOException("в архиве нет mod.json");
+            JSONObject j = new JSONObject(readAll(new File(tmp, "mod.json")));
+            if (!m.name.equals(j.optString("name")) || j.optInt("version") != m.version) throw new IOException("mod.json не совпадает с каталогом");
+            File dst = new File(root, m.name); File keep = new File(dst, "disabled"); boolean wasOff = keep.exists();
+            deleteTree(dst); if (!tmp.renameTo(dst)) throw new IOException("не удалось переименовать каталог мода");
+            if (wasOff) new File(dst, "disabled").createNewFile();
+        } finally { deleteTree(tmp); }
+    }
+
+    static void deleteTree(File f) { File[] k = f.listFiles(); if (k != null) for (File x : k) deleteTree(x); f.delete(); }
 
     View wrap(LinearLayout l) { return l; }
 
