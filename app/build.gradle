@@ -173,7 +173,9 @@ task generateGodAssets {
             dst.parentFile.mkdirs()
             dst.setBytes(src.getText("UTF-8").replace("\r\n", "\n").getBytes("UTF-8"))
         }
-        ["dapt", "gsh", "wlrun"].each { copyLf(it, new File(outDir, "bin")) }
+        // god-termux: every runtime script (the same set the app expects in $PREFIX/bin), not only dapt/gsh/wlrun
+        ["dapt", "gsh", "dsu", "dsu-tx-server.py", "wlrun", "wlbench", "wlchromium", "xfce-wl", "xfce-status", "claude-chrome-host"]
+            .each { copyLf(it, new File(outDir, "bin")) }
         copyLf("glibc-fhs.sh", new File(outDir, "etc/profile.d"))
         def os = System.getProperty("os.name").toLowerCase()
         def hostTag = os.contains("win") ? "windows-x86_64" : (os.contains("mac") ? "darwin-x86_64" : "linux-x86_64")
@@ -198,8 +200,24 @@ task generateGodAssets {
             def run = new File(shimDir, "fhs-run")
             runCmd([clang.absolutePath, "--target=${target}".toString(), "-shared", "-fPIC", "-O2", "-o", lib.absolutePath, new File(godRoot, "fhs/fhs.c").absolutePath, "-ldl"])
             runCmd([clang.absolutePath, "--target=${target}".toString(), "-O2", "-o", run.absolutePath, new File(godRoot, "fhs/fhs-run.c").absolutePath])
+            // god-termux: dapt's hard link -> copy fallback (LD_PRELOAD for dpkg), as in build-local.sh
+            def nolink = new File(shimDir, "libdapt-nolink.so")
+            runCmd([clang.absolutePath, "--target=${target}".toString(), "-shared", "-fPIC", "-O2", "-o", nolink.absolutePath, new File(godRoot, "runtime/nolink.c").absolutePath])
+            def files = [lib, run, nolink]
+            // god-termux: the glibc-side shim (LD_PRELOAD into glibc programs) only exists for arm64; it needs a glibc cross compiler
+            // (CI: apt gcc-aarch64-linux-gnu; on the phone build-local.sh builds it with the Termux glibc toolchain)
+            if (abi == "arm64-v8a") {
+                def gcc = (System.getenv("PATH") ?: "").split(File.pathSeparator).collect { new File(it, "aarch64-linux-gnu-gcc") }.find { it.canExecute() }
+                if (gcc != null) {
+                    def glibcLib = new File(shimDir, "libfhs-glibc.so")
+                    runCmd([gcc.absolutePath, "-shared", "-fPIC", "-O2", "-DGLIBC_BUILD", "-fuse-ld=bfd", "-o", glibcLib.absolutePath, new File(godRoot, "fhs/fhs.c").absolutePath, "-ldl"])
+                    files = [lib, glibcLib, run, nolink]
+                } else {
+                    logger.warn("god-termux: aarch64-linux-gnu-gcc not found, libfhs-glibc.so is NOT built (glibc programs will not work with this APK)")
+                }
+            }
             def sums = new StringBuilder()
-            [lib, run].each { f ->
+            files.each { f ->
                 md.reset()
                 f.withInputStream { s -> byte[] b = new byte[65536]; int n; while ((n = s.read(b)) > 0) md.update(b, 0, n) }
                 sums.append(md.digest().collect { String.format("%02x", it) }.join("")).append("  ").append(f.name).append("\n")

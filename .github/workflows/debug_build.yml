@@ -28,6 +28,22 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # god-termux: glibc cross toolchain (libfhs-glibc.so, libSPIRV-Tools.so) + build tools for the native extras
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu cmake ninja-build
+
+      - name: Cache glibc god-lib
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/assets/god/glibc/god-lib
+          key: god-lib-${{ hashFiles('god/tools/gpu/build-glibc-libs.sh') }}
+
+      # libwlcomp.so + its bionic libs, god-lib; build-local.sh does the same on the phone
+      - name: Build native extras (Wayland compositor, glibc libs)
+        run: bash god/tools/ci/build-native.sh
+
       - name: Build APKs
         shell: bash {0}
         env:
@@ -84,6 +100,24 @@ jobs:
             > "${APK_BASENAME_PREFIX}_sha256sums"); then
             exit_on_error "Generate sha25sums failed for '$APK_VERSION_TAG' release."
           fi
+
+      # god-termux: fail the build if the arm64 APK lacks anything the phone needs (this is what a plain Gradle build used to miss)
+      - name: Verify god runtime inside the arm64-v8a APK
+        run: |
+          apk="${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_arm64-v8a.apk"
+          list="$(unzip -Z1 "$apk")"
+          missing=0
+          for f in \
+            assets/god/glibc/shim/arm64-v8a/libfhs-bionic.so assets/god/glibc/shim/arm64-v8a/libfhs-glibc.so \
+            assets/god/glibc/shim/arm64-v8a/fhs-run assets/god/glibc/shim/arm64-v8a/libdapt-nolink.so assets/god/glibc/shim/arm64-v8a/SHA256SUMS \
+            assets/god/bin/dapt assets/god/bin/gsh assets/god/bin/dsu assets/god/bin/dsu-tx-server.py assets/god/bin/wlrun \
+            assets/god/bin/wlbench assets/god/bin/xfce-wl assets/god/bin/claude-chrome-host assets/god/etc/profile.d/glibc-fhs.sh \
+            lib/arm64-v8a/libwlcomp.so lib/arm64-v8a/libwayland-server.so lib/arm64-v8a/libffi.so lib/arm64-v8a/libandroid-support.so; do
+            if ! grep -qxF "$f" <<<"$list"; then echo "::error::missing in APK: $f"; missing=1; fi
+          done
+          # optional glibc libs: warn only
+          grep -q 'assets/god/glibc/god-lib/libSPIRV-Tools.so' <<<"$list" || echo "::warning::APK has no glibc/god-lib/libSPIRV-Tools.so"
+          exit $missing
 
       - name: Attach universal APK file
         uses: actions/upload-artifact@v6
