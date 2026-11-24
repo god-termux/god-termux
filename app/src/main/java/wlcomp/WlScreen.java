@@ -36,6 +36,7 @@ import android.widget.Toast;
 import com.termux.mod.ModScreen;
 import godui.Ui;
 import java.io.File;
+import java.util.Map;
 
 /** Window of the god-termux Wayland compositor: GTK/Qt programs (or a whole desktop, see xfce-wl) are shown here, composed on the GPU through EGL. */
 public class WlScreen implements ModScreen, WlSettingsUi.Host {
@@ -57,7 +58,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
     private Activity act; private Ui ui; private WlPrefs p; private final Handler handler = new Handler(Looper.getMainLooper());
     private FrameLayout root, stage, box; private WlView view; private CursorView cursor; private TextView hint, menuBtn; private LinearLayout keybar, padButtons, menuCard;
     private View scrim, settingsView;
-    private boolean quit, ctrl, alt, warnedNonAscii; private TextView ctrlBtn, altBtn, modeItem;
+    private boolean quit, ctrl, alt, warnedNonAscii; private TextView ctrlBtn, altBtn, modeItem, cosmicItem; private volatile Process cosmicProc;
     private int surfW, surfH, curScale = 2, lastSentScale = -1; private int lastBoxW = -1, lastBoxH = -1, lastSurfW = -1, lastSurfH = -1;
 
     // ------------------------------------------------------------------------------------------------ setup
@@ -92,6 +93,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         applyDisplay(); applyPointer(); applyChrome();
         handler.post(poll);
         if (a.getIntent().getBooleanExtra("settings", false)) root.post(new Runnable() { public void run() { openSettings(); } });
+        if (a.getIntent().getBooleanExtra("cosmic", false)) root.post(new Runnable() { public void run() { startCosmic(); } });
     }
 
     private final Runnable poll = new Runnable() { @Override public void run() {
@@ -173,7 +175,51 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
 
     @Override public boolean onBack() { if (settingsView.getVisibility() == View.VISIBLE) { close(); return true; } if (menuCard.getVisibility() == View.VISIBLE) { closeMenu(); return true; } return false; }
     @Override public void onFocus(boolean has) { if (has) applySystemBars(); }
-    @Override public void onNewIntent(Intent i) { if (i != null && i.getBooleanExtra("settings", false)) openSettings(); }
+    @Override public void onNewIntent(Intent i) {
+        if (i == null) return;
+        if (i.getBooleanExtra("settings", false)) openSettings();
+        if (i.getBooleanExtra("cosmic", false)) startCosmic();
+    }
+
+    // ------------------------------------------------------------------------------------------------ COSMIC (пакет god-cosmic из репозитория god-termux/packages)
+    private boolean cosmicUp() { Process c = cosmicProc; if (c == null) return false; try { c.exitValue(); return false; } catch (IllegalThreadStateException e) { return true; } }
+    private String cosmicLabel() { return cosmicUp() ? "🌌  Остановить COSMIC" : "🌌  Запустить COSMIC"; }
+    private void toggleCosmic() { if (cosmicUp()) stopCosmic(); else startCosmic(); }
+
+    private ProcessBuilder cosmicCmd(String verb) {
+        File files = act.getFilesDir(), prefix = new File(files, "usr"), home = new File(files, "home");
+        ProcessBuilder pb = new ProcessBuilder(new File(prefix, "bin/god-cosmic").getAbsolutePath(), verb).redirectErrorStream(true);
+        Map<String, String> e = pb.environment(); e.put("HOME", home.getAbsolutePath()); e.put("PREFIX", prefix.getAbsolutePath());
+        e.put("TMPDIR", new File(prefix, "tmp").getAbsolutePath()); e.put("PATH", prefix + "/bin:/system/bin"); e.put("LANG", "C.UTF-8");
+        File bs = new File(prefix, "glibc/shim/libfhs-bionic.so"); if (bs.exists() && !new File(home, ".termux/fhs.off").exists()) e.put("LD_PRELOAD", bs.getAbsolutePath());
+        return pb;
+    }
+
+    private void startCosmic() {
+        if (cosmicUp()) return;
+        if (!new File(act.getFilesDir(), "usr/bin/god-cosmic").exists()) {
+            Toast.makeText(act, "COSMIC не установлен. В Termux: dapt install god-cosmic (см. github.com/god-termux/packages)", Toast.LENGTH_LONG).show(); return; }
+        try {
+            final Process proc = cosmicCmd("start").start(); cosmicProc = proc; refreshCosmicItem();
+            new Thread(new Runnable() { public void run() {
+                try (java.io.BufferedReader rd = new java.io.BufferedReader(new java.io.InputStreamReader(proc.getInputStream()))) {
+                    String l; while ((l = rd.readLine()) != null) android.util.Log.i("god-cosmic", l); } catch (Throwable ignored) {}
+                try { proc.waitFor(); } catch (InterruptedException ignored) {}
+                handler.post(new Runnable() { public void run() { refreshCosmicItem(); } });
+            } }).start();
+        } catch (Throwable t) { Toast.makeText(act, "COSMIC не запустился: " + t, Toast.LENGTH_LONG).show(); }
+    }
+
+    private void stopCosmic() {
+        final Process c = cosmicProc;
+        new Thread(new Runnable() { public void run() {
+            try { cosmicCmd("stop").start().waitFor(); } catch (Throwable ignored) {}
+            if (c != null) c.destroy();
+            handler.post(new Runnable() { public void run() { refreshCosmicItem(); } });
+        } }).start();
+    }
+
+    private void refreshCosmicItem() { if (cosmicItem != null) cosmicItem.setText(cosmicLabel()); }
 
     // ------------------------------------------------------------------------------------------------ floating menu
     private String modeLabel() { return "🖱  Режим: " + (p.touchMode == 1 ? "тачпад" : "прямое касание"); }
@@ -199,6 +245,8 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         menuCard.addView(menuItem("⌨  Клавиатура", new Runnable() { public void run() { closeMenu(); toggleKeyboard(); } }));
         modeItem = menuItem(modeLabel(), new Runnable() { public void run() { p.touchMode = 1 - p.touchMode; p.save(); applyPointer(); closeMenu(); } });
         menuCard.addView(modeItem);
+        cosmicItem = menuItem(cosmicLabel(), new Runnable() { public void run() { closeMenu(); toggleCosmic(); } });
+        menuCard.addView(cosmicItem);
         menuCard.addView(menuItem("▤  Следующее окно", new Runnable() { public void run() { closeMenu(); nativeCycle(); } }));
         menuCard.addView(menuItem("✕  Закрыть Wayland", new Runnable() { public void run() { quit = true; act.finish(); } }));
         root.addView(menuCard, new FrameLayout.LayoutParams(ui.dp(250), -2, Gravity.CENTER));
