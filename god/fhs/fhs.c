@@ -280,6 +280,10 @@ int fstatat64(int d, const char* p, struct stat64* s, int f) { static int (*r)(i
 int statx(int d, const char* p, int f, unsigned m, struct statx* s) { static int (*r)(int, const char*, int, unsigned, struct statx*); if (!r) r = dlsym(RTLD_NEXT, "statx"); P(p); if (FAST) return FHS_TAGGED(SYS_statx, d, p, f, m, s); return r(d, p, f, m, s); }
 int access(const char* p, int m) { static int (*r)(const char*, int); if (!r) r = dlsym(RTLD_NEXT, "access"); P(p); if (FAST) return FHS_TAGGED(SYS_faccessat, AT_FDCWD, p, m, 0, 0); return r(p, m); }
 int faccessat(int d, const char* p, int m, int f) { static int (*r)(int, const char*, int, int); if (!r) r = dlsym(RTLD_NEXT, "faccessat"); P(p); if (FAST && !f) return FHS_TAGGED(SYS_faccessat, d, p, m, 0, 0); return r(d, p, m, f); }
+// eaccess/euidaccess: glibc implements them with an internal faccessat call that the hook above never sees (libxkbcommon and GLib check
+// their data directories this way), so the path stayed untranslated: /usr/share/X11/xkb was "not found" under FHS_DEBIAN=1
+int eaccess(const char* p, int m) { return faccessat(AT_FDCWD, p, m, AT_EACCESS); }
+int euidaccess(const char* p, int m) { return faccessat(AT_FDCWD, p, m, AT_EACCESS); }
 // AF_UNIX bind/connect with FHS paths (/tmp/..., /run/...): the address sits in sockaddr_un, not in a path argument, so open/stat-style hooks never saw it.
 // Without this a program could mkdir /tmp/x (mapped) and then bind /tmp/x/s.sock (not mapped): Claude's browser bridge died exactly like that.
 // Only absolute pathnames are rewritten; abstract (leading NUL) and relative addresses and non-FHS paths are passed through untouched.

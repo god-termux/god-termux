@@ -31,6 +31,8 @@ int bmain(int argc, char** argv) {
   system("rm -rf " R "*");
   OK(mkdir(T, 0700)); assert(exists(R));                                   // mkdir (already hooked)
   OK(mkdirat(AT_FDCWD, T "/sub", 0700)); assert(exists(R "/sub"));
+  // eaccess/euidaccess: glibc implements them with an internal faccessat call that a faccessat hook does not see (libxkbcommon checks its rules directory this way)
+  OK(eaccess(T "/sub", R_OK | X_OK)); OK(euidaccess(T "/sub", F_OK)); errno = 0; assert(eaccess(T "/missing", F_OK) == -1 && errno == ENOENT);
   int fd = open(T "/a", O_CREAT | O_WRONLY, 0600); assert(fd >= 0); assert(write(fd, "hi", 2) == 2); close(fd); assert(exists(R "/a"));
   OK(rename(T "/a", T "/b")); assert(!exists(R "/a") && exists(R "/b"));
   OK(renameat(AT_FDCWD, T "/b", AT_FDCWD, T "/c")); assert(exists(R "/c"));
