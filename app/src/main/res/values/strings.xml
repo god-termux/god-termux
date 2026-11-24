@@ -52,6 +52,15 @@
     <string name="title_create_named_session">New named session</string>
     <string name="action_create_named_session_confirm">Create</string>
 
+    <!-- god-termux: split screen -->
+    <string name="action_split_screen">Split screen</string>
+    <string name="action_split_right">Split right →</string>
+    <string name="action_split_down">Split down ↓</string>
+    <string name="action_swap_pane">Swap with neighbor</string>
+    <string name="action_close_pane">Close pane</string>
+    <string name="msg_max_panes_reached">Maximum of 4 panes reached.</string>
+    <string name="msg_split_screen_disabled">Split screen is disabled in termux.properties.</string>
+
     <string name="action_toggle_soft_keyboard">Keyboard</string>
 
     <string name="msg_enabling_terminal_toolbar">Enabling Terminal Toolbar</string>
@@ -202,6 +211,11 @@
                 <string name="termux_terminal_view_terminal_margin_adjustment_on">Terminal margin adjustment will be enabled.
                     It should be enabled to try to fix the issue where soft keyboard covers part of extra keys/terminal view.
                     If it causes screen flickering on your devices, then disable it. (Default)</string>
+
+                <!-- god-termux: split pane titles -->
+                <string name="termux_terminal_view_show_pane_titles_title">Pane Titles</string>
+                <string name="termux_terminal_view_show_pane_titles_off">Session titles in split panes will be hidden.</string>
+                <string name="termux_terminal_view_show_pane_titles_on">Session titles will be shown in split panes. (Default)</string>
 
 
 

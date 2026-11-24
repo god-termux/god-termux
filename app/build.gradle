@@ -62,7 +62,8 @@ android {
 
         externalNativeBuild {
             ndkBuild {
-                cFlags "-std=c11", "-Wall", "-Wextra", "-Werror", "-Os", "-fno-stack-protector", "-Wl,--gc-sections"
+                // god-termux: -std=c11 moved to LOCAL_CONLYFLAGS in Android.mk — NDK r29 rejects C std flags for C++ sources
+                cFlags "-Wall", "-Wextra", "-Werror", "-Os", "-fno-stack-protector", "-Wl,--gc-sections"
             }
         }
 
@@ -150,6 +151,64 @@ dependencies {
     testImplementation "org.robolectric:robolectric:4.10"
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:1.1.5"
 }
+
+// god-termux: generate assets/god (runtime scripts + per-ABI FHS shim) for Gradle builds,
+// mirroring step 4 of god/build-local.sh. Without this, PC-built APKs lack dapt/gsh/wlrun
+// and GodRuntime has nothing to install into $PREFIX. On-device builds without an NDK get
+// the scripts here and the flat arm64 shim from build-local.sh itself.
+task generateGodAssets {
+    def godRoot = rootProject.file("god")
+    def outDir = file("src/main/assets/god")
+    inputs.dir(new File(godRoot, "runtime"))
+    inputs.dir(new File(godRoot, "fhs"))
+    inputs.property("ndkVersion", android.ndkVersion ?: "none")
+    outputs.dir(outDir)
+    doLast {
+        // god-termux: force LF byte-wise — a Windows checkout may have CRLF, and a \r in the shebang
+        // breaks exec (bad interpreter). Gradle's copy filter is no good here: it rewrites lines
+        // with the platform separator, reintroducing CRLF on Windows.
+        def copyLf = { String name, File destDir ->
+            def src = new File(godRoot, "runtime/${name}")
+            def dst = new File(destDir, name)
+            dst.parentFile.mkdirs()
+            dst.setBytes(src.getText("UTF-8").replace("\r\n", "\n").getBytes("UTF-8"))
+        }
+        ["dapt", "gsh", "wlrun"].each { copyLf(it, new File(outDir, "bin")) }
+        copyLf("glibc-fhs.sh", new File(outDir, "etc/profile.d"))
+        def os = System.getProperty("os.name").toLowerCase()
+        def hostTag = os.contains("win") ? "windows-x86_64" : (os.contains("mac") ? "darwin-x86_64" : "linux-x86_64")
+        def clang = new File(android.ndkDirectory, "toolchains/llvm/prebuilt/${hostTag}/bin/clang" + (os.contains("win") ? ".exe" : ""))
+        if (!clang.exists()) {
+            logger.lifecycle("god-termux: NDK clang not found (${clang}), skipping FHS shim (god/build-local.sh provides it on device)")
+            return
+        }
+        // god-termux: shim built for every ABI (god/fhs has per-arch syscall/audit-arch guards)
+        def targets = ["arm64-v8a": "aarch64-linux-android21", "armeabi-v7a": "armv7a-linux-androideabi21", "x86": "i686-linux-android21", "x86_64": "x86_64-linux-android21"]
+        def md = java.security.MessageDigest.getInstance("SHA-256")
+        def runCmd = { List<String> cmd ->
+            def proc = new ProcessBuilder(cmd).redirectErrorStream(true).start()
+            def output = proc.inputStream.text
+            def rc = proc.waitFor()
+            if (rc != 0) throw new GradleException("god assets: command failed (${rc}): ${cmd.join(' ')}\n${output}")
+        }
+        targets.each { abi, target ->
+            def shimDir = new File(outDir, "glibc/shim/${abi}")
+            shimDir.mkdirs()
+            def lib = new File(shimDir, "libfhs-bionic.so")
+            def run = new File(shimDir, "fhs-run")
+            runCmd([clang.absolutePath, "--target=${target}".toString(), "-shared", "-fPIC", "-O2", "-o", lib.absolutePath, new File(godRoot, "fhs/fhs.c").absolutePath, "-ldl"])
+            runCmd([clang.absolutePath, "--target=${target}".toString(), "-O2", "-o", run.absolutePath, new File(godRoot, "fhs/fhs-run.c").absolutePath])
+            def sums = new StringBuilder()
+            [lib, run].each { f ->
+                md.reset()
+                f.withInputStream { s -> byte[] b = new byte[65536]; int n; while ((n = s.read(b)) > 0) md.update(b, 0, n) }
+                sums.append(md.digest().collect { String.format("%02x", it) }.join("")).append("  ").append(f.name).append("\n")
+            }
+            new File(shimDir, "SHA256SUMS").text = sums.toString()
+        }
+    }
+}
+preBuild.dependsOn generateGodAssets
 
 task versionName {
     doLast {

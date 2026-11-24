@@ -284,8 +284,12 @@ public class FileUtils {
                 if (!isParentPath) {
                     return true;
                 }
+            } else {
+                // god-termux: an explicitly ignored path (e.g. $PREFIX/tmp) is ignored with its whole subtree;
+                // mods write logs into $PREFIX/tmp before the bootstrap check, which used to block the install
+                continue;
             }
-                
+
             if (getFileType(subFilePath, false) == FileType.DIRECTORY) {
                 // If non ignored sub file found, then early exit, otherwise continue looking
                 if (nonIgnoredSubFileExists(subFile.listFiles(), ignoredSubFilePaths))

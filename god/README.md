@@ -10,6 +10,7 @@ Unofficial fork of [Termux](https://github.com/termux/termux-app) (GPLv3). Not a
 - **`god/mods/dsuset`**: external mod (build with `modbuild god/mods/dsuset`, loaded at Termux start) that switches Wireless debugging on/off from the app via `am broadcast -a dsu.ADB_WIFI --ei value 0|1`; `dsu` uses it to re-enable debugging automatically.
 - **`dapt`** (`god/runtime/dapt`): isolated Debian (arm64) tree in `$PREFIX/debian` with its own apt/dpkg (`dapt init`, `dapt update`, `dapt install …`).
 - **New UI**: palette, rounded cards, restyled drawer/settings/dialogs (console untouched).
+- **Split screen** (`app/src/main/java/com/termux/mod/split`): up to 4 live terminal panes in a free split tree with draggable dividers. Tap a pane to focus it (IME, extra keys, toolbar input and macros follow the focus; the first tap only switches focus). Split via the drawer button or the pane's ⋮ menu (split →/↓, swap with neighbor, close); each new pane gets a fresh session with the focused pane's cwd. Picking a session in the drawer assigns it to the focused pane — if it lives in another pane, the panes swap. Sessions keep running when their pane is closed; the layout, sessions and focus survive app restarts. `disable-split-screen=true` in `termux.properties` turns it off; pane titles can be hidden in Settings → Terminal View.
 
 ## Layout
 - `app/src/main/java/com/termux/mod` loader (`ModLoader`, `Builtin`, `GodRuntime`, `ModActivity`)

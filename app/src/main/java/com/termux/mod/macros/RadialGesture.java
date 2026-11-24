@@ -19,8 +19,12 @@ public final class RadialGesture {
     private final Runnable hold = new Runnable() { @Override public void run() {
         if (!swallow || !down) return;
         swallow = false;
-        View t = act.getTerminalView();
-        if (t instanceof com.termux.view.TerminalView && ((com.termux.view.TerminalView) t).isSelectingText()) ((com.termux.view.TerminalView) t).stopTextSelectionMode();
+        // god-termux: focus the pane under the touch first, so macros run into that pane
+        com.termux.mod.split.PaneView pane = act.getPaneManager() == null ? null : act.getPaneManager().paneAt(lx, ly);
+        if (pane != null) {
+            act.getPaneManager().focus(pane);
+            if (pane.getTerminalView().isSelectingText()) pane.getTerminalView().stopTextSelectionMode();
+        }
         menu = new RadialMenu(act, new MacroStore(act));
         if (!menu.show(lx, ly)) { menu = null; reset(); }
     } };
@@ -36,9 +40,12 @@ public final class RadialGesture {
     private void reset() { taps = 0; down = false; swallow = false; handler.removeCallbacks(hold); }
 
     private boolean inTerminal(MotionEvent e) {
-        View t = act.getTerminalView(); if (t == null || act.getDrawer().isDrawerOpen(android.view.Gravity.LEFT)) return false;
+        // god-termux: the gesture area is the whole split layout, but never a divider being dragged
+        com.termux.mod.split.SplitLayout t = act.getPaneManager() == null ? null : act.getPaneManager().getLayout();
+        if (t == null || act.getDrawer().isDrawerOpen(android.view.Gravity.LEFT)) return false;
         int[] loc = new int[2]; t.getLocationInWindow(loc);
-        return e.getX() >= loc[0] && e.getX() <= loc[0] + t.getWidth() && e.getY() >= loc[1] && e.getY() <= loc[1] + t.getHeight();
+        boolean inside = e.getX() >= loc[0] && e.getX() <= loc[0] + t.getWidth() && e.getY() >= loc[1] && e.getY() <= loc[1] + t.getHeight();
+        return inside && !t.isOverDivider(e.getX(), e.getY());
     }
 
     /** @return true when the event was consumed (radial menu active). */

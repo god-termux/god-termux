@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- god-termux: split screen icon — two panes side by side -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M3,4 H10.5 V20 H3 Z M4.5,5.5 V18.5 H9 V5.5 Z M13.5,4 H21 V20 H13.5 Z M15,5.5 V18.5 H19.5 V5.5 Z" />
+</vector>

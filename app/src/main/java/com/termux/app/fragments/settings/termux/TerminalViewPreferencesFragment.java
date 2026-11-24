@@ -57,6 +57,9 @@ class TerminalViewPreferencesDataStore extends PreferenceDataStore {
             case "terminal_margin_adjustment":
                     mPreferences.setTerminalMarginAdjustment(value);
                 break;
+            case "show_pane_titles":
+                    mPreferences.setShowPaneTitles(value);
+                break;
             default:
                 break;
         }
@@ -69,6 +72,8 @@ class TerminalViewPreferencesDataStore extends PreferenceDataStore {
         switch (key) {
             case "terminal_margin_adjustment":
                 return mPreferences.isTerminalMarginAdjustmentEnabled();
+            case "show_pane_titles":
+                return mPreferences.shouldShowPaneTitles();
             default:
                 return false;
         }

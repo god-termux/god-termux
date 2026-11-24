@@ -590,6 +590,11 @@ public abstract class TermuxSharedProperties {
         return (boolean) getInternalPropertyValue(TermuxPropertyConstants.KEY_DISABLE_HARDWARE_KEYBOARD_SHORTCUTS, true);
     }
 
+    /** god-termux: whether split screen (multiple terminal panes) is disabled. */
+    public boolean isSplitScreenDisabled() {
+        return (boolean) getInternalPropertyValue(TermuxPropertyConstants.KEY_DISABLE_SPLIT_SCREEN, true);
+    }
+
     public boolean areTerminalSessionChangeToastsDisabled() {
         return (boolean) getInternalPropertyValue(TermuxPropertyConstants.KEY_DISABLE_TERMINAL_SESSION_CHANGE_TOAST, true);
     }

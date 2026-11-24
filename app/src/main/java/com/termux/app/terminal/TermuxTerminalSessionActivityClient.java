@@ -21,6 +21,8 @@ import com.termux.shared.interact.ShareUtils;
 import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
 import com.termux.shared.termux.interact.TextInputDialogUtils;
 import com.termux.app.TermuxActivity;
+import com.termux.mod.split.PaneManager;
+import com.termux.mod.split.PaneView;
 import com.termux.shared.termux.terminal.TermuxTerminalSessionClientBase;
 import com.termux.shared.termux.TermuxConstants;
 import com.termux.app.TermuxService;
@@ -31,6 +33,7 @@ import com.termux.terminal.TerminalColors;
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 import com.termux.terminal.TextStyle;
+import com.termux.view.TerminalView;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -67,16 +70,20 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
      */
     public void onStart() {
         // The service has connected, but data may have changed since we were last in the foreground.
-        // Get the session stored in shared preferences stored by {@link #onStop} if its valid,
-        // otherwise get the last session currently running.
+        // god-termux: keep the split layout; only replace sessions that vanished while away.
         if (mActivity.getTermuxService() != null) {
-            setCurrentSession(getCurrentStoredSessionOrLast());
+            mActivity.getPaneManager().validateSessions();
+            TerminalSession focusedSession = mActivity.getCurrentSession();
+            if (focusedSession == null || mActivity.getTermuxService().getIndexOfSession(focusedSession) < 0)
+                setCurrentSession(getCurrentStoredSessionOrLast());
             termuxSessionListNotifyUpdated();
         }
+        // god-termux: pick up pane chrome settings (titles) changed while away
+        mActivity.getPaneManager().updateChrome();
 
         // The current terminal session may have changed while being away, force
-        // a refresh of the displayed terminal.
-        mActivity.getTerminalView().onScreenUpdated();
+        // a refresh of the displayed terminals.
+        for (TerminalView view : mActivity.getPaneManager().allViews()) view.onScreenUpdated();
     }
 
     /**
@@ -96,6 +103,8 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         // Store current session in shared preferences so that it can be restored later in
         // {@link #onStart} if needed.
         setCurrentStoredSession();
+        // god-termux: persist the split layout (tree + session handles + focus)
+        mActivity.getPaneManager().saveState();
 
         // Release mBellSoundPool resources, specially to prevent exceptions like the following to be thrown
         // java.util.concurrent.TimeoutException: android.media.SoundPool.finalize() timed out after 10 seconds
@@ -118,17 +127,22 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     public void onTextChanged(@NonNull TerminalSession changedSession) {
         if (!mActivity.isVisible()) return;
 
-        if (mActivity.getCurrentSession() == changedSession) mActivity.getTerminalView().onScreenUpdated();
+        // god-termux: refresh whichever pane shows the changed session, not just the focused one
+        PaneView pane = mActivity.getPaneManager().paneFor(changedSession);
+        if (pane != null) pane.getTerminalView().onScreenUpdated();
     }
 
     @Override
     public void onTitleChanged(@NonNull TerminalSession updatedSession) {
         if (!mActivity.isVisible()) return;
 
-        if (updatedSession != mActivity.getCurrentSession()) {
-            // Only show toast for other sessions than the current one, since the user
-            // probably consciously caused the title change to change in the current session
-            // and don't want an annoying toast for that.
+        PaneView pane = mActivity.getPaneManager().paneFor(updatedSession);
+        if (pane != null) pane.updateTitle();
+
+        if (pane == null) {
+            // Only show toast for sessions not visible in any pane, since the user
+            // probably consciously caused the title change in a visible session
+            // and doesn't want an annoying toast for that.
             mActivity.showToast(toToastTitle(updatedSession), true);
         }
 
@@ -158,8 +172,8 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
                 Logger.logVerbose(LOG_TAG, "The \"" + finishedSession.mSessionName + "\" session will be force finished automatically since result in pending.");
         }
 
-        if (mActivity.isVisible() && finishedSession != mActivity.getCurrentSession()) {
-            // Show toast for non-current sessions that exit.
+        if (mActivity.isVisible() && mActivity.getPaneManager().paneFor(finishedSession) == null) {
+            // god-termux: show toast only for sessions not visible in any pane.
             // Verify that session was not removed before we got told about it finishing:
             if (index >= 0)
                 mActivity.showToast(toToastTitle(finishedSession) + " - exited", true);
@@ -192,8 +206,10 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         if (!mActivity.isVisible()) return;
 
         String text = ShareUtils.getTextStringFromClipboardIfSet(mActivity, true);
-        if (text != null)
-            mActivity.getTerminalView().mEmulator.paste(text);
+        // god-termux: paste into the emulator of the session that asked for it (or the focused one)
+        TerminalSession target = session != null ? session : mActivity.getCurrentSession();
+        if (text != null && target != null && target.getEmulator() != null)
+            target.getEmulator().paste(text);
     }
 
     @Override
@@ -230,8 +246,9 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         }
 
         // If cursor is to enabled now, then start cursor blinking if blinking is enabled
-        // otherwise stop cursor blinking
-        mActivity.getTerminalView().setTerminalCursorBlinkerState(enabled, false);
+        // otherwise stop cursor blinking. god-termux: applies to all split panes.
+        for (TerminalView view : mActivity.getPaneManager().allViews())
+            view.setTerminalCursorBlinkerState(enabled, false);
     }
 
     @Override
@@ -248,10 +265,12 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     /**
      * Should be called when mActivity.onResetTerminalSession() is called
      */
-    public void onResetTerminalSession() {
+    public void onResetTerminalSession(TerminalSession session) {
         // Ensure blinker starts again after reset if cursor blinking was disabled before reset like
         // with "tput civis" which would have called onTerminalCursorStateChange()
-        mActivity.getTerminalView().setTerminalCursorBlinkerState(true, true);
+        PaneView pane = mActivity.getPaneManager().paneFor(session);
+        TerminalView view = pane != null ? pane.getTerminalView() : mActivity.getTerminalView();
+        if (view != null) view.setTerminalCursorBlinkerState(true, true);
     }
 
 
@@ -289,11 +308,12 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
 
 
-    /** Try switching to session. */
+    /** Try switching the focused pane to session (swaps panes if the session lives in another one). */
     public void setCurrentSession(TerminalSession session) {
         if (session == null) return;
 
-        if (mActivity.getTerminalView().attachSession(session)) {
+        PaneManager panes = mActivity.getPaneManager();
+        if (panes.assign(panes.focused(), session)) {
             // notify about switched session if not already displaying the session
             notifyOfSessionChange();
         }
@@ -362,30 +382,46 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     }
 
     public void addNewSession(boolean isFailSafe, String sessionName) {
+        addNewSession(isFailSafe, sessionName, null);
+    }
+
+    /**
+     * god-termux: with {@code targetPane != null} the new session goes straight into that pane
+     * (used by split) without switching the focus. Returns false if no session was created.
+     */
+    public boolean addNewSession(boolean isFailSafe, String sessionName, PaneView targetPane) {
         TermuxService service = mActivity.getTermuxService();
-        if (service == null) return;
+        if (service == null) return false;
 
         if (service.getTermuxSessionsSize() >= MAX_SESSIONS) {
             new AlertDialog.Builder(mActivity).setTitle(R.string.title_max_terminals_reached).setMessage(R.string.msg_max_terminals_reached)
                 .setPositiveButton(android.R.string.ok, null).show();
-        } else {
-            TerminalSession currentSession = mActivity.getCurrentSession();
-
-            String workingDirectory;
-            if (currentSession == null) {
-                workingDirectory = mActivity.getProperties().getDefaultWorkingDirectory();
-            } else {
-                workingDirectory = currentSession.getCwd();
-            }
-
-            TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
-            if (newTermuxSession == null) return;
-
-            TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
-            setCurrentSession(newTerminalSession);
-
-            mActivity.getDrawer().closeDrawers();
+            return false;
         }
+
+        TerminalSession currentSession = mActivity.getCurrentSession();
+
+        String workingDirectory;
+        if (currentSession == null) {
+            workingDirectory = mActivity.getProperties().getDefaultWorkingDirectory();
+        } else {
+            workingDirectory = currentSession.getCwd();
+        }
+
+        TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
+        if (newTermuxSession == null) return false;
+
+        TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
+        if (targetPane != null) {
+            targetPane.getTerminalView().attachSession(newTerminalSession);
+            targetPane.updateTitle();
+            termuxSessionListNotifyUpdated();
+        } else {
+            setCurrentSession(newTerminalSession);
+        }
+
+        mActivity.getDrawer().closeDrawers();
+        return true;
     }
 
     public void setCurrentStoredSession() {
@@ -441,14 +477,31 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         if (size == 0) {
             // There are no sessions to show, so finish the activity.
             mActivity.finishActivityIfNotFinishing();
-        } else {
-            if (index >= size) {
-                index = size - 1;
-            }
-            TermuxSession termuxSession = service.getTermuxSession(index);
-            if (termuxSession != null)
-                setCurrentSession(termuxSession.getTerminalSession());
+            return;
         }
+
+        // god-termux: the pane that showed the finished session gets the next free session
+        // (never one already shown in another pane) or closes if there is none.
+        PaneManager panes = mActivity.getPaneManager();
+        PaneView pane = panes.paneFor(finishedSession);
+        if (pane == null) return; // session was not displayed in any pane
+
+        if (index >= size) index = size - 1;
+        TerminalSession replacement = null;
+        TermuxSession termuxSession = service.getTermuxSession(index);
+        if (termuxSession != null && panes.paneFor(termuxSession.getTerminalSession()) == null)
+            replacement = termuxSession.getTerminalSession();
+        if (replacement == null) {
+            for (TermuxSession candidate : service.getTermuxSessions()) {
+                TerminalSession session = candidate.getTerminalSession();
+                if (session != null && panes.paneFor(session) == null) {
+                    replacement = session;
+                    break;
+                }
+            }
+        }
+        if (replacement != null) panes.assign(pane, replacement);
+        else panes.close(pane);
     }
 
     public void termuxSessionListNotifyUpdated() {
@@ -504,14 +557,17 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
             }
 
             TerminalColors.COLOR_SCHEME.updateWith(props);
-            TerminalSession session = mActivity.getCurrentSession();
-            if (session != null && session.getEmulator() != null) {
-                session.getEmulator().mColors.reset();
+            // god-termux: reset colors and typeface for every split pane
+            for (TerminalView view : mActivity.getPaneManager().allViews()) {
+                TerminalSession session = view.getCurrentSession();
+                if (session != null && session.getEmulator() != null) {
+                    session.getEmulator().mColors.reset();
+                }
             }
             updateBackgroundColor();
 
             final Typeface newTypeface = (fontFile.exists() && fontFile.length() > 0) ? Typeface.createFromFile(fontFile) : Typeface.MONOSPACE;
-            mActivity.getTerminalView().setTypeface(newTypeface);
+            for (TerminalView view : mActivity.getPaneManager().allViews()) view.setTypeface(newTypeface);
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Error in checkForFontAndColors()", e);
         }

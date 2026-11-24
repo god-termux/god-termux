@@ -29,6 +29,24 @@ extern char** environ;
 #ifndef SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP
 #define SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP (1UL << 0)
 #endif
+/* god-termux: 32-bit archs (armv7, x86) name this syscall fstatat64, not newfstatat */
+#ifndef __NR_newfstatat
+#ifdef __NR_fstatat64
+#define __NR_newfstatat __NR_fstatat64
+#endif
+#endif
+/* god-termux: supervise the native arch of this build, not only aarch64 */
+#if defined(__aarch64__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#elif defined(__arm__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_ARM
+#elif defined(__x86_64__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_X86_64
+#elif defined(__i386__)
+#define FHS_AUDIT_ARCH AUDIT_ARCH_I386
+#else
+#define FHS_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#endif
 static const int NRS[] = {__NR_openat, __NR_newfstatat, __NR_faccessat, __NR_faccessat2, __NR_readlinkat, __NR_statx,
   __NR_mkdirat, __NR_unlinkat, __NR_symlinkat, __NR_linkat, __NR_renameat, __NR_renameat2, __NR_fchmodat, __NR_fchownat, __NR_utimensat, __NR_bind, __NR_connect};
 #define NN (sizeof NRS / sizeof NRS[0])
@@ -199,7 +217,7 @@ int main(int argc, char** argv) {
   close(sp[1]); prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
   struct sock_filter f[9 + NN * 2 + 1]; int k = 0;
   f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
-  f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0);
+  f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, FHS_AUDIT_ARCH, 1, 0);
   f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   // Calls made from the shim's trampoline (fhs-fast.h): the shim has already translated the path. Everything else is intercepted.
   f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer));

@@ -50,11 +50,21 @@ public class TermuxSessionsListViewController extends ArrayAdapter<TermuxSession
         }
 
         TextView sessionTitleView = sessionRowView.findViewById(R.id.session_title);
+        View paneDot = sessionRowView.findViewById(R.id.session_pane_dot);
 
         TerminalSession sessionAtRow = getItem(position).getTerminalSession();
         if (sessionAtRow == null) {
             sessionTitleView.setText("null session");
+            if (paneDot != null) paneDot.setVisibility(View.GONE);
             return sessionRowView;
+        }
+
+        // god-termux: mark sessions that live in a split pane (dot in the pane's border color)
+        com.termux.mod.split.PaneView pane = mActivity.getPaneManager().paneFor(sessionAtRow);
+        boolean inPane = pane != null && mActivity.getPaneManager().count() > 1;
+        if (paneDot != null) {
+            paneDot.setVisibility(inPane ? View.VISIBLE : View.GONE);
+            if (inPane) paneDot.setBackgroundTintList(android.content.res.ColorStateList.valueOf(pane.getPaneColor()));
         }
 
         boolean shouldEnableDarkTheme = ThemeUtils.shouldEnableDarkTheme(mActivity, NightMode.getAppNightMode().getName());
@@ -69,6 +79,7 @@ public class TermuxSessionsListViewController extends ArrayAdapter<TermuxSession
         String sessionTitle = sessionAtRow.getTitle();
 
         String numberPart = "[" + (position + 1) + "] ";
+        if (inPane) numberPart = "[" + (position + 1) + "·P" + (mActivity.getPaneManager().displayIndexOf(pane) + 1) + "] ";
         String sessionNamePart = (TextUtils.isEmpty(name) ? "" : name);
         String sessionTitlePart = (TextUtils.isEmpty(sessionTitle) ? "" : ((sessionNamePart.isEmpty() ? "" : "\n") + sessionTitle));
 
