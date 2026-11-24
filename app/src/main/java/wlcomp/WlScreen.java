@@ -447,13 +447,22 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
         }
 
         // ---- native multi-touch: every finger is a wl_touch point (COSMIC and GTK/Qt apps get real touch events)
+        private boolean gestureActive;   // 3+ fingers: the gesture is ours, programs got touch-cancel and see nothing more until all fingers are up
         private boolean nativeTouches(MotionEvent e) {
-            int a = e.getActionMasked(), idx = e.getActionIndex();
+            int a = e.getActionMasked(), idx = e.getActionIndex(), n = e.getPointerCount();
+            if (a == MotionEvent.ACTION_DOWN) gestureActive = false;
+            if (gestureActive) { if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) gestureActive = false; return true; }
             switch (a) {
-                case MotionEvent.ACTION_DOWN: case MotionEvent.ACTION_POINTER_DOWN:
+                case MotionEvent.ACTION_DOWN:
+                    nativeTouch(0, e.getPointerId(idx), e.getX(idx) * kx(), e.getY(idx) * ky()); return true;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    if (n >= 3) {   // three fingers: menu, four: next window
+                        nativeTouch(3, e.getPointerId(0), 0, 0); gestureActive = true;
+                        if (n == 3) toggleMenu(); else if (n == 4) nativeCycle();
+                        return true; }
                     nativeTouch(0, e.getPointerId(idx), e.getX(idx) * kx(), e.getY(idx) * ky()); return true;
                 case MotionEvent.ACTION_MOVE:
-                    for (int i = 0; i < e.getPointerCount(); i++) nativeTouch(1, e.getPointerId(i), e.getX(i) * kx(), e.getY(i) * ky()); return true;
+                    for (int i = 0; i < n; i++) nativeTouch(1, e.getPointerId(i), e.getX(i) * kx(), e.getY(i) * ky()); return true;
                 case MotionEvent.ACTION_UP: case MotionEvent.ACTION_POINTER_UP:
                     nativeTouch(2, e.getPointerId(idx), e.getX(idx) * kx(), e.getY(idx) * ky()); return true;
                 case MotionEvent.ACTION_CANCEL: nativeTouch(3, e.getPointerId(0), 0, 0); return true;
@@ -466,7 +475,7 @@ public class WlScreen implements ModScreen, WlSettingsUi.Host {
             if (p.mouseMode == 2) return true;   // mouse-only mode: touches on the picture are ignored
             if (p.touchMode != 1 && cursor.getVisibility() == View.VISIBLE) cursor.setVisibility(View.GONE);
             if (p.touchMode == 2) return nativeTouches(e);
-            if (p.touchMode != 2 && e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 3) {   // three fingers: menu
+            if (e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 3) {   // three fingers: menu
                 handler.removeCallbacks(longPress); if (leftDown) { nativeButton(0, 0); leftDown = false; } toggleMenu(); return true; }
             if (p.touchMode == 1) return padTouch(e);
             float x = e.getX(), y = e.getY();
