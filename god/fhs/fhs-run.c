@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
+#define FHS_TLS __thread   // several supervisor threads: the "creating" flag of fmap() must be per thread
 #include "fhsmap.h"
 #include "fhs-fast.h"
 extern char** environ;
@@ -46,6 +48,16 @@ extern char** environ;
 #define FHS_AUDIT_ARCH AUDIT_ARCH_I386
 #else
 #define FHS_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#endif
+/* god-termux: bytes the kernel writes for newfstatat/fstatat64; it was a literal 128 (aarch64 only): x86_64 needs 144, 32-bit stat64 fewer */
+#ifdef __LP64__
+#define KSTAT_SZ sizeof(struct stat)
+#else
+#define KSTAT_SZ sizeof(struct stat64)
+#endif
+_Static_assert(sizeof(struct stat) <= 256 && KSTAT_SZ <= 256, "kst buffer too small");
+#ifndef SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV
+#define SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV (1UL << 5)   /* Linux 5.19+: a traced task stays killable while the supervisor is working on its call */
 #endif
 static const int NRS[] = {__NR_openat, __NR_newfstatat, __NR_faccessat, __NR_faccessat2, __NR_readlinkat, __NR_statx,
   __NR_mkdirat, __NR_unlinkat, __NR_symlinkat, __NR_linkat, __NR_renameat, __NR_renameat2, __NR_fchmodat, __NR_fchownat, __NR_utimensat, __NR_bind, __NR_connect};
@@ -92,6 +104,15 @@ static int wr(int pid, uint64_t addr, const void* b, size_t n) {
   ssize_t k = pwrite(mem, b, n, addr); close(mem); return k == (ssize_t)n ? 0 : -1;
 }
 
+// god-termux: creating calls run in this process, whose umask is not the traced program's. The supervisor runs with umask 0 and masks
+// the mode here with the program's umask (Umask: line of /proc/TID/status, Linux 4.7+; 022 if it cannot be read).
+static mode_t tracee_umask(int tid) {
+  char p[64], b[512]; snprintf(p, sizeof p, "/proc/%d/status", tid);
+  int f = open(p, O_RDONLY | O_CLOEXEC); if (f < 0) return 022;
+  ssize_t n = read(f, b, sizeof b - 1); close(f); if (n <= 0) return 022;
+  b[n] = 0; const char* u = strstr(b, "\nUmask:"); if (!u) return 022;
+  return (mode_t)(strtoul(u + 7, NULL, 8) & 0777);
+}
 static void reply(int fd, struct seccomp_notif* rq, long val, int err, int cont) {
   struct seccomp_notif_resp r; memset(&r, 0, sizeof r); r.id = rq->id; r.val = val; r.error = err ? -err : 0; r.flags = cont ? SECCOMP_USER_NOTIF_FLAG_CONTINUE : 0;
   ioctl(fd, SECCOMP_IOCTL_NOTIF_SEND, &r); }
@@ -115,7 +136,7 @@ static int handle_write_i(int fd, struct seccomp_notif* rq) {
   int pid = rq->pid; int nr = rq->data.nr; const uint64_t* a = rq->data.args; char o1[PATH_MAX], m1[PATH_MAX], o2[PATH_MAX], m2[PATH_MAX]; long res = 0;
   if (nr == __NR_mkdirat || nr == __NR_unlinkat || nr == __NR_fchmodat || nr == __NR_fchownat || nr == __NR_utimensat) {
     const char* m = mapat(pid, a[1], o1, m1); if (!m) return 0;
-    if (nr == __NR_mkdirat) res = syscall(__NR_mkdirat, AT_FDCWD, m, (mode_t)a[2]);
+    if (nr == __NR_mkdirat) res = syscall(__NR_mkdirat, AT_FDCWD, m, (mode_t)a[2] & ~tracee_umask(pid));
     else if (nr == __NR_unlinkat) res = syscall(__NR_unlinkat, AT_FDCWD, m, (int)a[2]);
     else if (nr == __NR_fchmodat) res = syscall(__NR_fchmodat, AT_FDCWD, m, (mode_t)a[2]);
     else if (nr == __NR_fchownat) res = syscall(__NR_fchownat, AT_FDCWD, m, (uid_t)a[2], (gid_t)a[3], (int)a[4]);
@@ -173,12 +194,13 @@ static void handle(int fd, struct seccomp_notif* rq) {
     // Give an ordinary read-only descriptor instead: fstat, /proc/self/fd/N, fchmod and use as a directory all work on it.
     // What is lost: names the caller cannot read, and O_NOFOLLOW on a symlink (ELOOP instead of a descriptor for the link).
     if (fl & O_PATH) fl = (fl & (O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW)) | O_RDONLY | O_NONBLOCK;
-    int nf = open(m, fl, (mode_t)a[3]);
+    mode_t md = (mode_t)a[3]; if ((fl & O_CREAT) || (fl & O_TMPFILE) == O_TMPFILE) md &= ~tracee_umask(pid);
+    int nf = open(m, fl, md);
     if (nf < 0) { e = errno; }
     else { struct seccomp_notif_addfd af; memset(&af, 0, sizeof af); af.id = rq->id; af.flags = SECCOMP_ADDFD_FLAG_SEND; af.srcfd = nf; af.newfd_flags = (fl & O_CLOEXEC) ? O_CLOEXEC : 0;
       int r = ioctl(fd, SECCOMP_IOCTL_NOTIF_ADDFD, &af); close(nf); if (r >= 0) return; reply(fd, rq, 0, errno, 0); return; }
   } else if (nr == __NR_newfstatat) {
-    char kst[256]; res = syscall(__NR_newfstatat, AT_FDCWD, m, kst, (int)a[3]); if (res < 0) e = errno; else if (wr(pid, a[2], kst, 128)) e = EFAULT;
+    char kst[256]; memset(kst, 0, sizeof kst); res = syscall(__NR_newfstatat, AT_FDCWD, m, kst, (int)a[3]); if (res < 0) e = errno; else if (wr(pid, a[2], kst, KSTAT_SZ)) e = EFAULT;
   } else if (nr == __NR_statx) {
     char kst[256]; res = syscall(__NR_statx, AT_FDCWD, m, (int)a[2], (unsigned)a[3], kst); if (res < 0) e = errno; else if (wr(pid, a[4], kst, 256)) e = EFAULT;
   } else if (nr == __NR_faccessat || nr == __NR_faccessat2) {
@@ -190,23 +212,60 @@ static void handle(int fd, struct seccomp_notif* rq) {
 }
 
 // FHS_SUP_STATS=FILE: when the last supervised process exits, write how many calls were intercepted (diagnostics and tests).
-static unsigned long stat_calls;
+static volatile unsigned long stat_calls;
 static void write_stats(void) {
   const char* f = getenv("FHS_SUP_STATS"); if (!f || !*f) return;
   int o = open(f, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); if (o < 0) return;
-  char b[64]; int n = snprintf(b, sizeof b, "notifications=%lu\n", stat_calls); if (write(o, b, n) < 0) {} close(o);
+  char b[64]; int n = snprintf(b, sizeof b, "notifications=%lu\n", __atomic_load_n(&stat_calls, __ATOMIC_RELAXED)); if (write(o, b, n) < 0) {} close(o);
+}
+static int notif_fd; static size_t notif_size;
+// god-termux: ONE worker serves every notification (a single hot thread answers fastest: with several receivers blocked, each notification wakes
+// another, cold core, and a call takes about twice as long). Only when that worker is stuck inside a call (open() of a FIFO, a slow file system)
+// does the watcher thread add helpers, so the other traced threads, and the writer that would release a blocked FIFO reader, are not left waiting.
+#define MAXW 32
+#define STUCK_MS 100
+static volatile long busy_ms[MAXW];   // 0: idle; otherwise CLOCK_MONOTONIC milliseconds (+1) at which the current call started
+static volatile int active[MAXW];     // slot in use
+static int max_workers = 4;           // FHS_SUP_THREADS; 1 = never add helpers
+static long mono_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000L + t.tv_nsec / 1000000 + 1; }
+static int others_busy(int me) { for (int i = 0; i < max_workers; i++) if (i != me && active[i] && busy_ms[i]) return 1; return 0; }
+static void* worker(void* arg) {
+  int id = (int)(intptr_t)arg; struct seccomp_notif* rq = malloc(notif_size);
+  for (;;) { memset(rq, 0, notif_size);
+    if (ioctl(notif_fd, SECCOMP_IOCTL_NOTIF_RECV, rq) < 0) { if (errno == EINTR || errno == ENOENT) continue; break; }
+    __atomic_add_fetch(&stat_calls, 1, __ATOMIC_RELAXED);
+    busy_ms[id] = mono_ms(); handle(notif_fd, rq); busy_ms[id] = 0;
+    if (id > 0 && !others_busy(id)) { active[id] = 0; free(rq); return NULL; }   // a helper leaves once nobody else is stuck
+  }
+  write_stats(); _exit(0);
+}
+static void maybe_add_helper(void) {
+  long now = mono_ms(), oldest = now; int idle = 0, act = 0, slot = -1;
+  for (int i = 0; i < max_workers; i++) {
+    if (active[i]) { act++; if (!busy_ms[i]) idle++; else if (busy_ms[i] < oldest) oldest = busy_ms[i]; } else if (slot < 0) slot = i; }
+  if (act == 0 || idle || slot < 0 || now - oldest < STUCK_MS) return;
+  pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 512 * 1024); pthread_t t;
+  active[slot] = 1;
+  if (pthread_create(&t, &at, worker, (void*)(intptr_t)slot) == 0) pthread_detach(t); else active[slot] = 0;
 }
 static void supervisor(int sock) {
   int fd = recv_fd(sock); close(sock); int dn = open("/dev/null", O_RDWR); dup2(dn, 0); dup2(dn, 1); dup2(dn, 2); if (dn > 2) close(dn);
   if (fd < 0) _exit(1);
+  umask(0);   // creating calls are masked with the traced program's umask (tracee_umask)
   // Linux 6.6+: wake the supervisor on the caller's CPU instead of waiting for another core to leave idle. Older kernels refuse; that is fine.
   if (!getenv("FHS_SUP_NOSYNC")) ioctl(fd, SECCOMP_IOCTL_NOTIF_SET_FLAGS, SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP);
   struct seccomp_notif_sizes sz; syscall(__NR_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, &sz);
-  struct seccomp_notif* rq = malloc(sz.seccomp_notif);
-  for (;;) { struct pollfd pf = {fd, POLLIN, 0}; if (poll(&pf, 1, -1) < 0 && errno != EINTR) break;
-    if ((pf.revents & (POLLHUP | POLLERR)) && !(pf.revents & POLLIN)) break;
-    memset(rq, 0, sz.seccomp_notif); if (ioctl(fd, SECCOMP_IOCTL_NOTIF_RECV, rq) < 0) { if (errno == EINTR || errno == ENOENT) continue; break; }
-    stat_calls++; handle(fd, rq); }
+  notif_fd = fd; notif_size = sz.seccomp_notif;
+  const char* e = getenv("FHS_SUP_THREADS"); if (e && atoi(e) > 0) max_workers = atoi(e); if (max_workers > MAXW) max_workers = MAXW;
+  pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 512 * 1024); pthread_t t;
+  active[0] = 1;
+  if (pthread_create(&t, &at, worker, (void*)0) == 0) pthread_detach(t); else worker((void*)0);   // no thread: serve on this one
+  // This thread watches: POLLHUP arrives when the last task under the filter has gone (blocked receivers are not all woken for it);
+  // with helpers allowed it also wakes every STUCK_MS to see whether the worker is stuck.
+  for (;;) { struct pollfd pf = {fd, 0, 0}; int r = poll(&pf, 1, max_workers > 1 ? STUCK_MS : -1);
+    if (r < 0 && errno != EINTR) break;
+    if (r > 0 && (pf.revents & (POLLHUP | POLLERR))) break;
+    if (r == 0) maybe_add_helper(); }
   write_stats(); _exit(0);
 }
 
@@ -229,7 +288,9 @@ int main(int argc, char** argv) {
   for (unsigned i = 0; i < NN; i++) { f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NRS[i], 0, 1); f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF); }
   f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   struct sock_fprog prog = {k, f};
-  int lfd = syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &prog);
+  // WAIT_KILLABLE_RECV (Linux 5.19+): a traced task stays killable while the supervisor works on its call; older kernels refuse the flag with EINVAL
+  int lfd = syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER | SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV, &prog);
+  if (lfd < 0 && errno == EINVAL) lfd = syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &prog);
   if (lfd < 0) { unsetenv("FHS_FAST_ABI"); setenv("FHS_SUP", "1", 1); }   // fallback: run unsupervised
   else { int sent = send_fd(sp[0], lfd); close(lfd); setenv("FHS_SUP", "1", 1);
     if (sent > 0) setenv("FHS_FAST_ABI", FHS_FAST_ABI_VALUE, 1); else unsetenv("FHS_FAST_ABI"); }
