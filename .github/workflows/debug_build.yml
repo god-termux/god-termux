@@ -112,7 +112,7 @@ jobs:
             assets/god/glibc/shim/arm64-v8a/fhs-run assets/god/glibc/shim/arm64-v8a/libdapt-nolink.so assets/god/glibc/shim/arm64-v8a/SHA256SUMS \
             assets/god/bin/dapt assets/god/bin/gsh assets/god/bin/dsu assets/god/bin/dsu-tx-server.py assets/god/bin/wlrun \
             assets/god/bin/wlbench assets/god/bin/xfce-wl assets/god/bin/claude-chrome-host assets/god/etc/profile.d/glibc-fhs.sh \
-            lib/arm64-v8a/libwlcomp.so lib/arm64-v8a/libwayland-server.so lib/arm64-v8a/libffi.so lib/arm64-v8a/libandroid-support.so; do
+            lib/arm64-v8a/libwlcomp.so lib/arm64-v8a/libwayland-server.so lib/arm64-v8a/libffi.so lib/arm64-v8a/libandroid-support.so lib/arm64-v8a/libc++_shared.so; do
             if ! grep -qxF "$f" <<<"$list"; then echo "::error::missing in APK: $f"; missing=1; fi
           done
           # optional glibc libs: warn only

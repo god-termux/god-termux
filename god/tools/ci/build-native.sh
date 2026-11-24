@@ -42,6 +42,12 @@ J="$ROOT/app/src/main/jniLibs/arm64-v8a"; mkdir -p "$J"
   -L"$SR/lib" -lwayland-server -lEGL -lGLESv2 -landroid -llog
 # runtime dependencies the compositor needs inside the app lib dir (build-local.sh copies the same three)
 cp -L "$SR/lib/libwayland-server.so" "$SR/lib/libffi.so" "$SR/lib/libandroid-support.so" "$J/"
+# NDK clang++ links libc++ shared (libwlcomp.so has NEEDED libc++_shared.so); build-local.sh copies it from $PREFIX/lib too
+cp -L "$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$J/"
+# every NEEDED entry of libwlcomp.so must be a system library or shipped next to it
+for n in $(readelf -d "$J/libwlcomp.so" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+  case "$n" in libEGL.so|libGLESv2.so|libandroid.so|liblog.so|libm.so|libdl.so|libc.so) ;; *) [ -f "$J/$n" ] || { echo "libwlcomp.so needs $n but it is not shipped" >&2; exit 1; } ;; esac
+done
 ls -l "$J"
 
 # ---- glibc god-lib (optional)
