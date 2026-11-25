@@ -278,9 +278,10 @@ typedef int (*start_t)(void*, unsigned); typedef void (*stop_t)();
 typedef void (*motion_t)(double, double); typedef void (*button_t)(unsigned, bool); typedef void (*scroll_t)(double);
 typedef void (*touch_t)(unsigned, unsigned long long, double, double); typedef void (*key_t)(unsigned, bool);
 start_t f_start; stop_t f_stop; motion_t f_motion; button_t f_button; scroll_t f_scroll; touch_t f_touch; key_t f_key;
-std::atomic<bool> active{false}; std::thread th; ANativeWindow* win = nullptr; unsigned mhz = 60000;
+std::atomic<bool> active{false}, failed{false}; std::thread th; ANativeWindow* win = nullptr; unsigned mhz = 60000;
+int lastW = 0, lastH = 0, lastScale = 2;   // параметры окна для отката на wlcomp
 
-bool enabled(const std::string& rt) { return access((rt + "/../../home/.termux/wl-cosmic").c_str(), F_OK) == 0; }
+bool enabled(const std::string& rt) { return !failed && access((rt + "/../../home/.termux/wl-cosmic").c_str(), F_OK) == 0; }
 bool load(const std::string& rt) {
   if (f_start) return true;
   std::string lib = rt + "/../../home/.termux/libcosmic_comp.so";
@@ -292,6 +293,7 @@ bool load(const std::string& rt) {
   if (!f_start || !f_stop || !f_motion || !f_button || !f_scroll || !f_touch || !f_key) { LOG("cosmic: нет символов в %s", lib.c_str()); f_start = nullptr; return false; }
   return true;
 }
+void fallback_to_wlcomp(const std::string& rt);
 void run(std::string rt) {
   std::string home = rt + "/../../home";
   setenv("XDG_RUNTIME_DIR", rt.c_str(), 1); setenv("HOME", home.c_str(), 1);
@@ -301,11 +303,25 @@ void run(std::string rt) {
   freopen((rt + "/cosmic-comp.log").c_str(), "w", stderr);
   LOG("cosmic: start, окно %p, %u мГц", (void*)win, mhz);
   int rc = f_start(win, mhz);
-  LOG("cosmic: завершился, код %d", rc); active = false;
+  LOG("cosmic: завершился, код %d", rc);
+  if (rc != 0) failed = true;   // повторный запуск в этом процессе невозможен: дальше работает обычный wlcomp
+  active = false;
+  if (rc != 0 && win) fallback_to_wlcomp(rt);
 }
 void start(const std::string& rt) {
   if (th.joinable()) th.join();
   active = true; th = std::thread(run, rt);
+}
+}  // namespace cosmic
+
+namespace cosmic {
+// cosmic-comp не запустился: отдаём то же окно обычному wlcomp, чтобы экран не оставался чёрным
+void fallback_to_wlcomp(const std::string& rt) {
+  if (running) return;
+  { std::lock_guard<std::mutex> g(wm); if (newWin) ANativeWindow_release(newWin); newWin = win; winChanged = true; }
+  win = nullptr; rtDir = rt; startW = lastW; startH = lastH; startScale = lastScale;
+  LOG("cosmic: откат на wlcomp");
+  running = true; std::thread(renderLoop).detach();
 }
 }  // namespace cosmic
 
@@ -316,6 +332,7 @@ JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeSurface(JNIEnv* e, jclass, job
   { std::lock_guard<std::mutex> g(wm); if (newWin) ANativeWindow_release(newWin); newWin = nw; winChanged = true; }
   if (nw && !running && !cosmic::active) {
     const char* c0 = e->GetStringUTFChars(rt, 0); std::string rt0 = c0; e->ReleaseStringUTFChars(rt, c0);
+    cosmic::lastW = w; cosmic::lastH = h; cosmic::lastScale = scale;
     if (cosmic::enabled(rt0) && cosmic::load(rt0)) { cosmic::win = nw; cosmic::start(rt0); return; }
   }
   if (nw && !running && !cosmic::active) {
