@@ -10,8 +10,8 @@ LIBS=${COSMIC_LIBS:-$HOME/android-libs/prefix/lib}
 modbuild "$HERE"
 OUT=$HOME/.termux/mods/cosmic/lib
 mkdir -p "$OUT"
-cp "$SO" "$OUT/libcosmic_comp.so"
-for l in libinput.so libudev.so.1 libdisplay-info.so; do cp -L "$LIBS/$l" "$OUT/$l"; done
+cp "$SO" "$OUT/.libcosmic_comp.so.new" && mv -f "$OUT/.libcosmic_comp.so.new" "$OUT/libcosmic_comp.so"   # атомарно: работающий композитор держит старый файл
+for l in libinput.so libudev.so.1 libdisplay-info.so; do cp -L "$LIBS/$l" "$OUT/.$l.new" && mv -f "$OUT/.$l.new" "$OUT/$l"; done
 # зависимости ищем рядом, затем в Termux (libgbm, libseat, libpixman, libxkbcommon, libevdev, libmtdev …)
 patchelf --set-rpath '$ORIGIN:/data/data/com.termux/files/usr/lib' "$OUT/libcosmic_comp.so" "$OUT/libinput.so"
 cat > "$PREFIX/bin/cosmic-native" <<'EOS'
