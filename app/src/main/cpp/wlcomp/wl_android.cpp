@@ -270,87 +270,26 @@ void renderLoop() {
 }
 }  // namespace
 
-// ---- Нативный COSMIC (cosmic-comp в bionic, рисует на GPU через Android EGL) -------------------------------------------
-// Включается флагом ~/.termux/wl-cosmic. Библиотеку libcosmic_comp.so (сборка god-termux/cosmic-comp, ветка android-native)
-// ищем в ~/.termux/libcosmic_comp.so. Вместо wlcomp сам композитор слушает Wayland-сокет в XDG_RUNTIME_DIR (usr/tmp).
-namespace cosmic {
-typedef int (*start_t)(void*, unsigned); typedef void (*stop_t)();
-typedef void (*motion_t)(double, double); typedef void (*button_t)(unsigned, bool); typedef void (*scroll_t)(double);
-typedef void (*touch_t)(unsigned, unsigned long long, double, double); typedef void (*key_t)(unsigned, bool);
-start_t f_start; stop_t f_stop; motion_t f_motion; button_t f_button; scroll_t f_scroll; touch_t f_touch; key_t f_key;
-std::atomic<bool> active{false}, failed{false}; std::thread th; ANativeWindow* win = nullptr; unsigned mhz = 60000;
-int lastW = 0, lastH = 0, lastScale = 2;   // параметры окна для отката на wlcomp
-
-bool enabled(const std::string& rt) { return !failed && access((rt + "/../../home/.termux/wl-cosmic").c_str(), F_OK) == 0; }
-bool load(const std::string& rt) {
-  if (f_start) return true;
-  std::string lib = rt + "/../../home/.termux/libcosmic_comp.so";
-  void* h = dlopen(lib.c_str(), RTLD_NOW | RTLD_GLOBAL);
-  if (!h) { LOG("cosmic: dlopen %s: %s", lib.c_str(), dlerror()); return false; }
-  f_start = (start_t)dlsym(h, "cosmic_start"); f_stop = (stop_t)dlsym(h, "cosmic_stop");
-  f_motion = (motion_t)dlsym(h, "cosmic_pointer_motion"); f_button = (button_t)dlsym(h, "cosmic_pointer_button");
-  f_scroll = (scroll_t)dlsym(h, "cosmic_scroll"); f_touch = (touch_t)dlsym(h, "cosmic_touch"); f_key = (key_t)dlsym(h, "cosmic_key");
-  if (!f_start || !f_stop || !f_motion || !f_button || !f_scroll || !f_touch || !f_key) { LOG("cosmic: нет символов в %s", lib.c_str()); f_start = nullptr; return false; }
-  return true;
-}
-void fallback_to_wlcomp(const std::string& rt);
-void run(std::string rt) {
-  std::string home = rt + "/../../home";
-  setenv("XDG_RUNTIME_DIR", rt.c_str(), 1); setenv("HOME", home.c_str(), 1);
-  setenv("XDG_CONFIG_HOME", (home + "/.config").c_str(), 1); setenv("XDG_DATA_HOME", (home + "/.local/share").c_str(), 1);
-  setenv("COSMIC_BACKEND", "winit", 1); setenv("COSMIC_DISABLE_XWAYLAND", "1", 1); setenv("RUST_BACKTRACE", "1", 0);
-  if (!getenv("RUST_LOG")) setenv("RUST_LOG", "warn", 1);
-  freopen((rt + "/cosmic-comp.log").c_str(), "w", stderr);
-  LOG("cosmic: start, окно %p, %u мГц", (void*)win, mhz);
-  int rc = f_start(win, mhz);
-  LOG("cosmic: завершился, код %d", rc);
-  if (rc != 0) failed = true;   // повторный запуск в этом процессе невозможен: дальше работает обычный wlcomp
-  active = false;
-  if (rc != 0 && win) fallback_to_wlcomp(rt);
-}
-void start(const std::string& rt) {
-  if (th.joinable()) th.join();
-  active = true; th = std::thread(run, rt);
-}
-}  // namespace cosmic
-
-namespace cosmic {
-// cosmic-comp не запустился: отдаём то же окно обычному wlcomp, чтобы экран не оставался чёрным
-void fallback_to_wlcomp(const std::string& rt) {
-  if (running) return;
-  { std::lock_guard<std::mutex> g(wm); if (newWin) ANativeWindow_release(newWin); newWin = win; winChanged = true; }
-  win = nullptr; rtDir = rt; startW = lastW; startH = lastH; startScale = lastScale;
-  LOG("cosmic: откат на wlcomp");
-  running = true; std::thread(renderLoop).detach();
-}
-}  // namespace cosmic
-
 extern "C" {
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeSurface(JNIEnv* e, jclass, jobject surface, jstring rt, jint w, jint h, jint scale) {
   ANativeWindow* nw = surface ? ANativeWindow_fromSurface(e, surface) : nullptr;
-  if (cosmic::active) return;   // окно уже отдано композитору COSMIC
   { std::lock_guard<std::mutex> g(wm); if (newWin) ANativeWindow_release(newWin); newWin = nw; winChanged = true; }
-  if (nw && !running && !cosmic::active) {
-    const char* c0 = e->GetStringUTFChars(rt, 0); std::string rt0 = c0; e->ReleaseStringUTFChars(rt, c0);
-    cosmic::lastW = w; cosmic::lastH = h; cosmic::lastScale = scale;
-    if (cosmic::enabled(rt0) && cosmic::load(rt0)) { cosmic::win = nw; cosmic::start(rt0); return; }
-  }
-  if (nw && !running && !cosmic::active) {
+  if (nw && !running) {
     const char* c = e->GetStringUTFChars(rt, 0); rtDir = c; e->ReleaseStringUTFChars(rt, c); startW = w; startH = h; startScale = scale;
     if (th.joinable()) th.join(); running = true; th = std::thread(renderLoop);
   } else if (nw) { reqW = w; reqH = h; resizeReq = true; }
 }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeRefresh(JNIEnv*, jclass, jint mhz) { refreshReq = mhz; if (mhz > 0) cosmic::mhz = mhz; }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeRefresh(JNIEnv*, jclass, jint mhz) { refreshReq = mhz; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeResize(JNIEnv*, jclass, jint w, jint h) { reqW = w; reqH = h; resizeReq = true; }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeScale(JNIEnv*, jclass, jint s) { scaleReq = s; }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeStop(JNIEnv*, jclass) { if (cosmic::active && cosmic::f_stop) { cosmic::f_stop(); if (cosmic::th.joinable()) cosmic::th.join(); } running = false; if (th.joinable()) th.join(); }
-JNIEXPORT jboolean JNICALL Java_wlcomp_WlScreen_nativeRunning(JNIEnv*, jclass) { return (running || cosmic::active) ? JNI_TRUE : JNI_FALSE; }
-JNIEXPORT jint JNICALL Java_wlcomp_WlScreen_nativeWindows(JNIEnv*, jclass) { return cosmic::active ? 1 : running ? wlc_window_count() : 0; }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeMotion(JNIEnv*, jclass, jfloat x, jfloat y) { if (cosmic::active) cosmic::f_motion(x, y); else wlc_in_motion(x, y); }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeTouch(JNIEnv*, jclass, jint phase, jint id, jfloat x, jfloat y) { if (cosmic::active) cosmic::f_touch(phase < 0 ? 0 : phase > 3 ? 3 : phase, id, x, y); else wlc_in_touch(phase, id, x, y); }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeButton(JNIEnv*, jclass, jint b, jint p) { if (cosmic::active) cosmic::f_button(b, p != 0); else wlc_in_button(b, p); }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeAxis(JNIEnv*, jclass, jfloat dy) { if (cosmic::active) cosmic::f_scroll(dy); else wlc_in_axis(dy); }
-JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeKey(JNIEnv*, jclass, jint k, jint p) { if (cosmic::active) cosmic::f_key(k, p != 0); else wlc_in_key(k, p); }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeStop(JNIEnv*, jclass) { running = false; if (th.joinable()) th.join(); }
+JNIEXPORT jboolean JNICALL Java_wlcomp_WlScreen_nativeRunning(JNIEnv*, jclass) { return running ? JNI_TRUE : JNI_FALSE; }
+JNIEXPORT jint JNICALL Java_wlcomp_WlScreen_nativeWindows(JNIEnv*, jclass) { return running ? wlc_window_count() : 0; }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeMotion(JNIEnv*, jclass, jfloat x, jfloat y) { wlc_in_motion(x, y); }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeTouch(JNIEnv*, jclass, jint phase, jint id, jfloat x, jfloat y) { wlc_in_touch(phase, id, x, y); }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeButton(JNIEnv*, jclass, jint b, jint p) { wlc_in_button(b, p); }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeAxis(JNIEnv*, jclass, jfloat dy) { wlc_in_axis(dy); }
+JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeKey(JNIEnv*, jclass, jint k, jint p) { wlc_in_key(k, p); }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeChar(JNIEnv*, jclass, jint c) { wlc_in_char(c); }
 JNIEXPORT void JNICALL Java_wlcomp_WlScreen_nativeCycle(JNIEnv*, jclass) { wlc_in_cycle(); }
 }
