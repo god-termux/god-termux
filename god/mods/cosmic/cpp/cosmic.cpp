@@ -54,7 +54,7 @@ void setenv_s(JNIEnv* e, const char* k, jstring v) { const char* c = e->GetStrin
 
 extern "C" {
 // 0 — запущен; иначе см. nativeError()
-JNIEXPORT jint JNICALL Java_cosmic_CosmicScreen_nativeStart(JNIEnv* e, jclass, jobject surface, jstring rt, jstring home, jstring libdir, jint refreshMhz) {
+JNIEXPORT jint JNICALL Java_cosmic_CosmicScreen_nativeStart(JNIEnv* e, jclass, jobject surface, jstring rt, jstring home, jstring libdir, jint refreshMhz, jfloat scale) {
   if (running) return 0;
   const char* ld = e->GetStringUTFChars(libdir, nullptr); bool ok = load(ld); e->ReleaseStringUTFChars(libdir, ld);
   if (!ok) return 1;
@@ -65,6 +65,7 @@ JNIEXPORT jint JNICALL Java_cosmic_CosmicScreen_nativeStart(JNIEnv* e, jclass, j
   snprintf(b, sizeof b, "%s/.local/share", h); setenv("XDG_DATA_HOME", b, 1);
   setenv("COSMIC_BACKEND", "winit", 1); setenv("COSMIC_DISABLE_XWAYLAND", "1", 1);
   if (!getenv("RUST_LOG")) setenv("RUST_LOG", "warn", 1);
+  if (scale >= 0.5f && scale <= 4.0f) { char sb[32]; snprintf(sb, sizeof sb, "%.3f", scale); setenv("COSMIC_SCALE", sb, 1); }
   win = ANativeWindow_fromSurface(e, surface);
   if (!win) { snprintf(err, sizeof err, "ANativeWindow_fromSurface вернул null"); return 2; }
   if (refreshMhz > 0) mhz = (unsigned)refreshMhz;

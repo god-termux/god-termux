@@ -20,7 +20,7 @@ import java.io.File;
 /** Полноэкранное окно, в которое cosmic-comp (libcosmic_comp.so) рисует через EGL. Ввод пробрасывается в композитор. */
 public class CosmicScreen implements ModScreen {
     static { System.loadLibrary("cosmic"); }
-    static native int nativeStart(Surface s, String runtimeDir, String home, String libDir, int refreshMhz);
+    static native int nativeStart(Surface s, String runtimeDir, String home, String libDir, int refreshMhz, float scale);
     static native String nativeError();
     static native boolean nativeRunning();
     static native void nativeSetWindow(Surface s);
@@ -76,8 +76,13 @@ public class CosmicScreen implements ModScreen {
         File dir = ModLoader.dir("cosmic");
         File files = act.getFilesDir();
         int mhz = Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f);
+        float scale = act.getResources().getDisplayMetrics().density;
+        try {   // ручная настройка: число в ~/.termux/cosmic-scale (например 2 или 2.5)
+            File sf = new File(files, "home/.termux/cosmic-scale");
+            if (sf.exists()) scale = Float.parseFloat(new String(java.nio.file.Files.readAllBytes(sf.toPath())).trim());
+        } catch (Throwable ignored) {}
         int rc = nativeStart(s, new File(files, "usr/tmp").getAbsolutePath(), new File(files, "home").getAbsolutePath(),
-                new File(dir, "lib").getAbsolutePath(), mhz);
+                new File(dir, "lib").getAbsolutePath(), mhz, scale);
         if (rc != 0) {
             status.setText("COSMIC не запустился: " + nativeError());
         } else {
