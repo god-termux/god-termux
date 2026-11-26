@@ -38,6 +38,8 @@ public class CosmicScreen implements ModScreen {
 
     @Override public void onCreate(Activity host, Bundle state) {
         act = host;
+        // автоповорот: следовать датчику ориентации (ModActivity сам обрабатывает configChanges, экран не пересоздаётся)
+        host.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
         CosmicLog.init(host.getFilesDir());
         CosmicLog.w("экран: onCreate, loader=" + getClass().getClassLoader());
         try {
@@ -99,7 +101,8 @@ public class CosmicScreen implements ModScreen {
         sv.requestFocus();
     }
 
-    private boolean started;
+    /** Запуск композитора неудачен: повторить можно только после перезапуска приложения (глобальный логгер) */
+    private static boolean failed;
 
     /** Исключение в обратном вызове: в журнал и на экран, приложение не роняем. */
     private void fail(String where, Throwable t) {
@@ -110,10 +113,14 @@ public class CosmicScreen implements ModScreen {
     }
 
     private void onSurface(Surface s) {
-        if (started && nativeRunning()) { nativeSetWindow(s); return; }
-        CosmicLog.w("onSurface: started=" + started + " running=" + nativeRunning());
-        if (started) return;   // композитор завершился: перезапуск возможен только после перезапуска приложения
-        started = true;
+        CosmicLog.w("onSurface: running=" + nativeRunning() + " failed=" + failed);
+        if (nativeRunning()) {   // композитор уже работает (экран открыт повторно или повёрнут): отдаём ему окно
+            nativeSetWindow(s);
+            status.setVisibility(View.GONE);
+            return;
+        }
+        if (failed) return;
+        failed = true;   // снимается после успешного старта ниже
         File dir = ModLoader.dir("cosmic");
         File files = act.getFilesDir();
         int mhz = Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f);
@@ -128,6 +135,7 @@ public class CosmicScreen implements ModScreen {
         if (rc != 0) {
             status.setText("COSMIC не запустился: " + nativeError());
         } else {
+            failed = false;
             status.setVisibility(View.GONE);
         }
     }
