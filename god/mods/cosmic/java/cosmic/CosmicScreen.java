@@ -178,6 +178,12 @@ public class CosmicScreen implements ModScreen {
             l = Math.max(l, dc.getSafeInsetLeft()); t = Math.max(t, dc.getSafeInsetTop());
             r = Math.max(r, dc.getSafeInsetRight()); b = Math.max(b, dc.getSafeInsetBottom());
         }
+        // зона системных жестов (в первую очередь «Назад» от левого/правого края): касания в ней перехватывает Android,
+        // поэтому кнопки окон у краёв (закрыть, свернуть, «+») там не нажимаются — окно COSMIC должно начинаться за ней
+        try {
+            android.graphics.Insets g = in.getSystemGestureInsets();
+            l = Math.max(l, g.left); r = Math.max(r, g.right); t = Math.max(t, g.top); b = Math.max(b, g.bottom);
+        } catch (Throwable ignored) {}
         int sig = (l * 31 + t) * 31 + (r * 31 + b);
         if (sig == lastMarginSig) return;
         lastMarginSig = sig;
@@ -257,6 +263,32 @@ public class CosmicScreen implements ModScreen {
         pushClipToCosmic();
     }
 
+
+    // ---- автозапуск служб рабочего стола (звук, мост Android, панель, док) при открытии экрана ----
+    private static boolean servicesStarted;
+
+    /** Запускает `god-cosmic start --native --desktop` в фоне: экран уже открыт, поэтому GOD_COSMIC_NO_OPEN=1. Отключение: ~/.termux/cosmic-no-autostart */
+    private void startDesktopServices() {
+        if (servicesStarted) return;
+        File files = act.getFilesDir(), usr = new File(files, "usr"), home = new File(files, "home");
+        if (new File(home, ".termux/cosmic-no-autostart").exists()) return;
+        File launcher = new File(usr, "debian/usr/bin/god-cosmic");
+        if (!launcher.exists()) { CosmicLog.w("автозапуск: нет " + launcher); return; }
+        servicesStarted = true;
+        try {
+            ProcessBuilder pb = new ProcessBuilder(new File(usr, "bin/bash").getPath(), "-c", "exec god-cosmic start --native --desktop");
+            java.util.Map<String, String> e = pb.environment();
+            e.put("PREFIX", usr.getPath()); e.put("HOME", home.getPath()); e.put("TMPDIR", new File(usr, "tmp").getPath());
+            e.put("PATH", new File(usr, "bin").getPath() + ":" + new File(usr, "debian/usr/bin").getPath() + ":/system/bin");
+            e.put("LANG", "en_US.UTF-8"); e.put("GOD_COSMIC_NO_OPEN", "1");
+            File shim = new File(usr, "glibc/shim/libfhs-bionic.so");   // даёт запускать glibc-программы из Debian-дерева
+            if (shim.exists()) e.put("LD_PRELOAD", shim.getPath());
+            pb.directory(home).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(new File(usr, "tmp/god-cosmic-start.log")));
+            pb.start();
+            CosmicLog.w("автозапуск: god-cosmic start --native --desktop");
+        } catch (Throwable t) { servicesStarted = false; CosmicLog.e("автозапуск", t); }
+    }
+
     private int lastWidth;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable scalePoll = new Runnable() {
@@ -294,6 +326,7 @@ public class CosmicScreen implements ModScreen {
             nativeSetWindow(s);
             applyScale(width);
             startClipboard();
+            startDesktopServices();
             status.setVisibility(View.GONE);
             return;
         }
@@ -316,6 +349,7 @@ public class CosmicScreen implements ModScreen {
             handler.removeCallbacks(scalePoll);
             handler.postDelayed(scalePoll, 2000);
             startClipboard();
+            startDesktopServices();
         }
     }
 
