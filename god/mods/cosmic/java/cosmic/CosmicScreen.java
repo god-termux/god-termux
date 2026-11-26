@@ -24,6 +24,7 @@ public class CosmicScreen implements ModScreen {
     static native boolean nativeRunning();
     static native void nativeSetWindow(Surface s);
     static native void nativeWindowLost();
+    static native void nativeSetScale(float scale);
     static native void nativeStop();
     static native void nativeMotion(float x, float y);
     static native void nativeButton(int button, int pressed);
@@ -40,6 +41,18 @@ public class CosmicScreen implements ModScreen {
         act = host;
         // автоповорот: следовать датчику ориентации (ModActivity сам обрабатывает configChanges, экран не пересоздаётся)
         host.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
+        // на весь экран: без системной панели навигации и без чёрных полос у выреза камеры
+        try {
+            android.view.Window win = host.getWindow();
+            win.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                android.view.WindowManager.LayoutParams lp = win.getAttributes();
+                lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                win.setAttributes(lp);
+            }
+        } catch (Throwable ignored) {}
         CosmicLog.init(host.getFilesDir());
         CosmicLog.w("экран: onCreate, loader=" + getClass().getClassLoader());
         try {
@@ -82,7 +95,7 @@ public class CosmicScreen implements ModScreen {
             @Override public void surfaceCreated(SurfaceHolder h) {}
             @Override public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) {
                 CosmicLog.w("surfaceChanged " + w + "x" + hh + " format=" + format);
-                try { onSurface(h.getSurface()); } catch (Throwable t) { fail("onSurface", t); }
+                try { onSurface(h.getSurface(), w); } catch (Throwable t) { fail("onSurface", t); }
             }
             @Override public void surfaceDestroyed(SurfaceHolder h) {
                 CosmicLog.w("surfaceDestroyed");
@@ -101,6 +114,48 @@ public class CosmicScreen implements ModScreen {
         sv.requestFocus();
     }
 
+
+    private static float lastScale;
+
+    /**
+     * Масштаб интерфейса. Приоритет: файл ~/.termux/cosmic-scale (число). Иначе 60% плотности экрана (Android 2.6 даёт
+     * слишком крупный COSMIC: он рассчитан на ~96 dpi, а не на 420), но не больше, чем нужно, чтобы логическая ширина
+     * экрана была не меньше ~1300 пикселей: экранной клавиатуре COSMIC нужно ~1200, иначе она обрезается (в портретной
+     * ориентации масштаб поэтому ниже, чем в альбомной).
+     */
+    private float desiredScale(int widthPx) {
+        try {
+            File sf = new File(act.getFilesDir(), "home/.termux/cosmic-scale");
+            if (sf.exists()) {
+                float v = Float.parseFloat(new String(java.nio.file.Files.readAllBytes(sf.toPath())).trim());
+                if (v >= 0.5f && v <= 4.0f) return v;
+            }
+        } catch (Throwable ignored) {}
+        float d = act.getResources().getDisplayMetrics().density * 0.6f;
+        if (widthPx > 0) d = Math.min(d, widthPx / 1300f);
+        return Math.max(0.7f, Math.min(2.0f, d));
+    }
+
+    private int lastWidth;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable scalePoll = new Runnable() {
+        @Override public void run() {
+            try { if (nativeRunning()) applyScale(lastWidth); } catch (Throwable ignored) {}
+            handler.postDelayed(this, 2000);   // файл ~/.termux/cosmic-scale можно править без перезапуска
+        }
+    };
+
+    /** Применить масштаб на лету, если он изменился. */
+    private void applyScale(int widthPx) {
+        if (widthPx > 0) lastWidth = widthPx;
+        float sc = desiredScale(lastWidth);
+        if (Math.abs(sc - lastScale) > 0.01f) {
+            lastScale = sc;
+            CosmicLog.w("масштаб " + sc + " (ширина " + lastWidth + ")");
+            nativeSetScale(sc);
+        }
+    }
+
     /** Запуск композитора неудачен: повторить можно только после перезапуска приложения (глобальный логгер) */
     private static boolean failed;
 
@@ -112,10 +167,11 @@ public class CosmicScreen implements ModScreen {
         });
     }
 
-    private void onSurface(Surface s) {
+    private void onSurface(Surface s, int width) {
         CosmicLog.w("onSurface: running=" + nativeRunning() + " failed=" + failed);
         if (nativeRunning()) {   // композитор уже работает (экран открыт повторно или повёрнут): отдаём ему окно
             nativeSetWindow(s);
+            applyScale(width);
             status.setVisibility(View.GONE);
             return;
         }
@@ -124,11 +180,9 @@ public class CosmicScreen implements ModScreen {
         File dir = ModLoader.dir("cosmic");
         File files = act.getFilesDir();
         int mhz = Math.round(act.getWindowManager().getDefaultDisplay().getRefreshRate() * 1000f);
-        float scale = act.getResources().getDisplayMetrics().density;
-        try {   // ручная настройка: число в ~/.termux/cosmic-scale (например 2 или 2.5)
-            File sf = new File(files, "home/.termux/cosmic-scale");
-            if (sf.exists()) scale = Float.parseFloat(new String(java.nio.file.Files.readAllBytes(sf.toPath())).trim());
-        } catch (Throwable ignored) {}
+        lastWidth = width;
+        float scale = desiredScale(width);
+        lastScale = scale;
         int rc = nativeStart(s, new File(files, "usr/tmp").getAbsolutePath(), new File(files, "home").getAbsolutePath(),
                 new File(dir, "lib").getAbsolutePath(), mhz, scale);
         CosmicLog.w("nativeStart -> " + rc + " " + nativeError() + " (scale " + scale + ", " + mhz + " мГц)");
@@ -137,6 +191,8 @@ public class CosmicScreen implements ModScreen {
         } else {
             failed = false;
             status.setVisibility(View.GONE);
+            handler.removeCallbacks(scalePoll);
+            handler.postDelayed(scalePoll, 2000);
         }
     }
 

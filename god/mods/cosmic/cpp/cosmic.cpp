@@ -20,8 +20,9 @@ typedef void (*button_t)(unsigned, bool);
 typedef void (*scroll_t)(double);
 typedef void (*touch_t)(unsigned, unsigned long long, double, double);
 typedef void (*key_t)(unsigned, bool);
+typedef void (*scale_t)(double);
 
-start_t f_start; void_t f_stop, f_lost; window_t f_set_window; motion_t f_motion; button_t f_button; scroll_t f_scroll; touch_t f_touch; key_t f_key;
+start_t f_start; void_t f_stop, f_lost; window_t f_set_window; motion_t f_motion; button_t f_button; scroll_t f_scroll; touch_t f_touch; key_t f_key; scale_t f_scale;
 bool loaded = false;
 volatile int running = 0;
 ANativeWindow *win = nullptr, *prev = nullptr;
@@ -46,6 +47,7 @@ bool load(const char* dir) {
   SYM(f_start, start_t, "cosmic_start") SYM(f_stop, void_t, "cosmic_stop") SYM(f_lost, void_t, "cosmic_window_lost")
   SYM(f_set_window, window_t, "cosmic_set_window") SYM(f_motion, motion_t, "cosmic_pointer_motion") SYM(f_button, button_t, "cosmic_pointer_button")
   SYM(f_scroll, scroll_t, "cosmic_scroll") SYM(f_touch, touch_t, "cosmic_touch") SYM(f_key, key_t, "cosmic_key")
+  f_scale = (scale_t)dlsym(h, "cosmic_set_scale");   // необязательный: нет в старых сборках библиотеки
   loaded = true;
   return true;
 }
@@ -86,6 +88,7 @@ JNIEXPORT void JNICALL Java_cosmic_CosmicScreen_nativeSetWindow(JNIEnv* e, jclas
   prev = win; win = nw;
 }
 JNIEXPORT void JNICALL Java_cosmic_CosmicScreen_nativeWindowLost(JNIEnv*, jclass) { if (running) f_lost(); }
+JNIEXPORT void JNICALL Java_cosmic_CosmicScreen_nativeSetScale(JNIEnv*, jclass, jfloat s) { if (running && f_scale) f_scale((double)s); }
 JNIEXPORT void JNICALL Java_cosmic_CosmicScreen_nativeStop(JNIEnv*, jclass) { if (running) f_stop(); }
 JNIEXPORT void JNICALL Java_cosmic_CosmicScreen_nativeMotion(JNIEnv*, jclass, jfloat x, jfloat y) { if (running) f_motion(x, y); }
 JNIEXPORT void JNICALL Java_cosmic_CosmicScreen_nativeButton(JNIEnv*, jclass, jint b, jint p) { if (running) f_button(b, p != 0); }
