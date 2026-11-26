@@ -91,6 +91,16 @@ public class CosmicScreen implements ModScreen {
         status.setPadding(48, 48, 48, 48);
         root.addView(status, new FrameLayout.LayoutParams(-1, -1));
         host.setContentView(root);
+        // безопасная зона: отступы по радиусу скругления дисплея и вырезу камеры, иначе кнопки в углах (питание, Workspaces,
+        // закрытие окна) попадают под закруглённые края и не нажимаются. Переопределение: ~/.termux/cosmic-margin (пиксели)
+        final SurfaceView svf = sv;
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override public android.view.WindowInsets onApplyWindowInsets(View v, android.view.WindowInsets in) {
+                try { applyMargins(svf, in); } catch (Throwable t) { CosmicLog.e("applyMargins", t); }
+                return in;
+            }
+        });
+        root.requestApplyInsets();
         sv.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder h) {}
             @Override public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) {
@@ -134,6 +144,47 @@ public class CosmicScreen implements ModScreen {
         float d = act.getResources().getDisplayMetrics().density * 0.6f;
         if (widthPx > 0) d = Math.min(d, widthPx / 1300f);
         return Math.max(0.7f, Math.min(2.0f, d));
+    }
+
+
+    private int lastMarginSig;
+
+    /** Радиус скругления дисплея (px) через рефлексию: API 31+, в сборочном android.jar его нет. */
+    private static int roundedRadius(android.view.WindowInsets in) {
+        int r = 0;
+        try {
+            java.lang.reflect.Method get = in.getClass().getMethod("getRoundedCorner", int.class);
+            for (int pos = 0; pos < 4; pos++) {
+                Object rc = get.invoke(in, pos);
+                if (rc != null) r = Math.max(r, (Integer) rc.getClass().getMethod("getRadius").invoke(rc));
+            }
+        } catch (Throwable ignored) {}
+        return r;
+    }
+
+    private void applyMargins(SurfaceView sv, android.view.WindowInsets in) {
+        int m;
+        File mf = new File(act.getFilesDir(), "home/.termux/cosmic-margin");
+        int fileMargin = -1;
+        try { if (mf.exists()) fileMargin = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(mf.toPath())).trim()); } catch (Throwable ignored) {}
+        int radius = roundedRadius(in);
+        if (fileMargin >= 0) m = fileMargin;
+        else if (radius > 0) m = Math.round(radius * 0.55f);   // угол прямоугольника должен лежать внутри дуги скругления + запас под палец
+        else m = Math.round(12 * act.getResources().getDisplayMetrics().density);
+        int l = m, t = m, r = m, b = m;
+        android.view.DisplayCutout dc = null;
+        if (android.os.Build.VERSION.SDK_INT >= 28) dc = in.getDisplayCutout();
+        if (dc != null) {
+            l = Math.max(l, dc.getSafeInsetLeft()); t = Math.max(t, dc.getSafeInsetTop());
+            r = Math.max(r, dc.getSafeInsetRight()); b = Math.max(b, dc.getSafeInsetBottom());
+        }
+        int sig = (l * 31 + t) * 31 + (r * 31 + b);
+        if (sig == lastMarginSig) return;
+        lastMarginSig = sig;
+        CosmicLog.w("отступы l=" + l + " t=" + t + " r=" + r + " b=" + b + " (радиус скругления " + radius + ")");
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -1);
+        lp.setMargins(l, t, r, b);
+        sv.setLayoutParams(lp);
     }
 
     private int lastWidth;
