@@ -187,6 +187,76 @@ public class CosmicScreen implements ModScreen {
         sv.setLayoutParams(lp);
     }
 
+
+    // ---- буфер обмена Android <-> COSMIC (скрипт god-cosmic-clipboard в Termux обменивается файлами) ----
+    private String lastClip = "";
+    private long lastClipMod;
+    private boolean clipStarted;
+
+    private File clipFile(String name) { return new File(act.getFilesDir(), "usr/tmp/" + name); }
+
+    private String androidClip() {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) act.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            android.content.ClipData d = cm.getPrimaryClip();
+            if (d == null || d.getItemCount() == 0) return null;
+            CharSequence t = d.getItemAt(0).coerceToText(act);
+            return t == null ? null : t.toString();
+        } catch (Throwable t) { return null; }
+    }
+
+    /** Android -> COSMIC: текст буфера обмена в файл (его подхватывает god-cosmic-clipboard). */
+    private void pushClipToCosmic() {
+        String t = androidClip();
+        if (t == null || t.isEmpty() || t.equals(lastClip)) return;
+        lastClip = t;
+        try {
+            File f = clipFile("clip-from-android"), tmp = clipFile("clip-from-android.tmp");
+            java.io.FileOutputStream o = new java.io.FileOutputStream(tmp);
+            o.write(t.getBytes("UTF-8")); o.close();
+            tmp.renameTo(f);
+        } catch (Throwable e) { CosmicLog.e("буфер: запись", e); }
+    }
+
+    /** COSMIC -> Android: новый файл от god-cosmic-clipboard кладём в ClipboardManager. */
+    private void pullClipFromCosmic() {
+        File f = clipFile("clip-from-cosmic");
+        if (!f.exists() || f.lastModified() == lastClipMod) return;
+        lastClipMod = f.lastModified();
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096]; int n;
+            while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+            in.close();
+            String t = b.toString("UTF-8");
+            if (t.isEmpty() || t.equals(lastClip)) return;
+            lastClip = t;
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) act.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("COSMIC", t));
+        } catch (Throwable e) { CosmicLog.e("буфер: чтение", e); }
+    }
+
+    private final Runnable clipPoll = new Runnable() {
+        @Override public void run() {
+            try { pullClipFromCosmic(); } catch (Throwable ignored) {}
+            handler.postDelayed(this, 1000);
+        }
+    };
+
+    private void startClipboard() {
+        if (clipStarted) return;
+        clipStarted = true;
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) act.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            cm.addPrimaryClipChangedListener(new android.content.ClipboardManager.OnPrimaryClipChangedListener() {
+                @Override public void onPrimaryClipChanged() { pushClipToCosmic(); }
+            });
+        } catch (Throwable t) { CosmicLog.e("буфер: слушатель", t); }
+        handler.postDelayed(clipPoll, 1000);
+        pushClipToCosmic();
+    }
+
     private int lastWidth;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable scalePoll = new Runnable() {
@@ -223,6 +293,7 @@ public class CosmicScreen implements ModScreen {
         if (nativeRunning()) {   // композитор уже работает (экран открыт повторно или повёрнут): отдаём ему окно
             nativeSetWindow(s);
             applyScale(width);
+            startClipboard();
             status.setVisibility(View.GONE);
             return;
         }
@@ -244,6 +315,7 @@ public class CosmicScreen implements ModScreen {
             status.setVisibility(View.GONE);
             handler.removeCallbacks(scalePoll);
             handler.postDelayed(scalePoll, 2000);
+            startClipboard();
         }
     }
 
@@ -355,8 +427,14 @@ public class CosmicScreen implements ModScreen {
     @Override public void onResume() {}
     @Override public void onPause() {}
     @Override public void onStop() {}
-    @Override public void onFocus(boolean has) {}
+    @Override public void onFocus(boolean has) { if (has && clipStarted) pushClipToCosmic(); }
     public void onNewIntent(android.content.Intent i) {}
-    public boolean onBack() { return false; }
+    /** «Назад» работает как Esc внутри COSMIC (закрыть меню, диалог); выйти из экрана — жестом «Домой» или из списка приложений. */
+    public boolean onBack() {
+        if (!nativeRunning()) return false;
+        nativeKey(1, 1);
+        nativeKey(1, 0);
+        return true;
+    }
     @Override public void onDestroy() { /* композитор остаётся жить в процессе; окно будет передано при следующем открытии экрана */ }
 }
