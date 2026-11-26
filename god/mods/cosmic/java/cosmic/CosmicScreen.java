@@ -19,7 +19,6 @@ import java.io.File;
 
 /** Полноэкранное окно, в которое cosmic-comp (libcosmic_comp.so) рисует через EGL. Ввод пробрасывается в композитор. */
 public class CosmicScreen implements ModScreen {
-    static { System.loadLibrary("cosmic"); }
     static native int nativeStart(Surface s, String runtimeDir, String home, String libDir, int refreshMhz, float scale);
     static native String nativeError();
     static native boolean nativeRunning();
@@ -35,8 +34,35 @@ public class CosmicScreen implements ModScreen {
     private Activity act;
     private TextView status;
 
+    private static boolean libLoaded;
+
     @Override public void onCreate(Activity host, Bundle state) {
         act = host;
+        CosmicLog.init(host.getFilesDir());
+        CosmicLog.w("экран: onCreate, loader=" + getClass().getClassLoader());
+        try {
+            if (!libLoaded) { System.loadLibrary("cosmic"); libLoaded = true; CosmicLog.w("libcosmic.so загружена"); }
+            build(host);
+            CosmicLog.w("экран: создан");
+        } catch (Throwable t) {
+            CosmicLog.e("экран: ошибка создания", t);
+            showError(host, "COSMIC: ошибка запуска экрана\n\n" + CosmicLog.trace(t));
+        }
+    }
+
+    private static void showError(Activity host, String text) {
+        android.widget.TextView tv = new android.widget.TextView(host);
+        tv.setText(text + "\n\n(журнал: usr/tmp/cosmic-mod.log)");
+        tv.setTextColor(Color.WHITE);
+        tv.setTextSize(11);
+        tv.setPadding(32, 32, 32, 32);
+        android.widget.ScrollView sv = new android.widget.ScrollView(host);
+        sv.setBackgroundColor(Color.BLACK);
+        sv.addView(tv);
+        host.setContentView(sv);
+    }
+
+    private void build(Activity host) {
         FrameLayout root = new FrameLayout(host);
         root.setBackgroundColor(Color.BLACK);
         SurfaceView sv = new SurfaceView(host);
@@ -209,5 +235,13 @@ public class CosmicScreen implements ModScreen {
         }
     }
 
+    // Все методы ModScreen переопределены явно: вызовы через default-методы интерфейса из загрузчика мода не используем
+    @Override public void onStart() {}
+    @Override public void onResume() {}
+    @Override public void onPause() {}
+    @Override public void onStop() {}
+    @Override public void onFocus(boolean has) {}
+    public void onNewIntent(android.content.Intent i) {}
+    public boolean onBack() { return false; }
     @Override public void onDestroy() { /* композитор остаётся жить в процессе; окно будет передано при следующем открытии экрана */ }
 }
