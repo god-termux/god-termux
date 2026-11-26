@@ -52,8 +52,14 @@ public class CosmicScreen implements ModScreen {
         host.setContentView(root);
         sv.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder h) {}
-            @Override public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) { onSurface(h.getSurface()); }
-            @Override public void surfaceDestroyed(SurfaceHolder h) { nativeWindowLost(); }
+            @Override public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) {
+                CosmicLog.w("surfaceChanged " + w + "x" + hh + " format=" + format);
+                try { onSurface(h.getSurface()); } catch (Throwable t) { fail("onSurface", t); }
+            }
+            @Override public void surfaceDestroyed(SurfaceHolder h) {
+                CosmicLog.w("surfaceDestroyed");
+                try { nativeWindowLost(); } catch (Throwable t) { fail("nativeWindowLost", t); }
+            }
         });
         sv.setOnTouchListener(new View.OnTouchListener() {
             @Override public boolean onTouch(View v, MotionEvent e) { return touch(e); }
@@ -69,8 +75,17 @@ public class CosmicScreen implements ModScreen {
 
     private boolean started;
 
+    /** Исключение в обратном вызове: в журнал и на экран, приложение не роняем. */
+    private void fail(String where, Throwable t) {
+        CosmicLog.e(where, t);
+        act.runOnUiThread(new Runnable() {
+            @Override public void run() { status.setVisibility(View.VISIBLE); status.setText("COSMIC: ошибка\n" + CosmicLog.trace(t)); }
+        });
+    }
+
     private void onSurface(Surface s) {
         if (started && nativeRunning()) { nativeSetWindow(s); return; }
+        CosmicLog.w("onSurface: started=" + started + " running=" + nativeRunning());
         if (started) return;   // композитор завершился: перезапуск возможен только после перезапуска приложения
         started = true;
         File dir = ModLoader.dir("cosmic");
@@ -83,6 +98,7 @@ public class CosmicScreen implements ModScreen {
         } catch (Throwable ignored) {}
         int rc = nativeStart(s, new File(files, "usr/tmp").getAbsolutePath(), new File(files, "home").getAbsolutePath(),
                 new File(dir, "lib").getAbsolutePath(), mhz, scale);
+        CosmicLog.w("nativeStart -> " + rc + " " + nativeError() + " (scale " + scale + ", " + mhz + " мГц)");
         if (rc != 0) {
             status.setText("COSMIC не запустился: " + nativeError());
         } else {

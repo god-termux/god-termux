@@ -16,8 +16,8 @@ for l in libinput.so libudev.so.1 libdisplay-info.so; do cp -L "$LIBS/$l" "$OUT/
 patchelf --set-rpath '$ORIGIN:/data/data/com.termux/files/usr/lib' "$OUT/libcosmic_comp.so" "$OUT/libinput.so"
 cat > "$PREFIX/bin/cosmic-native" <<'EOS'
 #!/data/data/com.termux/files/usr/bin/bash
-# Открыть экран нативного COSMIC (мод cosmic)
-exec am start -n com.termux/com.termux.mod.ModActivity --es mod cosmic --es class cosmic.CosmicScreen --ez fullscreen true "$@"
+# Открыть экран нативного COSMIC (мод cosmic). Журнал мода: $PREFIX/tmp/cosmic-mod.log
+exec am start -n com.termux/com.termux.mod.ModActivity --es mod cosmic --es class cosmic.CosmicLauncher --ez fullscreen true "$@"
 EOS
 chmod +x "$PREFIX/bin/cosmic-native"
 echo "готово: перезапустите Termux, затем: cosmic-native"
