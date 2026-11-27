@@ -1,0 +1,1 @@
+{"name":"cosmic","version":1,"main":"cosmic.CosmicMod","title":"COSMIC (нативный)","description":"Рабочий стол COSMIC: композитор cosmic-comp, собранный под Android (bionic), рисует на GPU через системный EGL внутри приложения. Экран: cosmic-native","icon":"🌌"}
