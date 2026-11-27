@@ -1,0 +1,30 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# wlclaude: Claude Desktop (Debian-дерево dapt) как Wayland-клиент композитора god-termux (wlcomp), по образцу wlchromium.
+# Дисплей: $WAYLAND_DISPLAY, если он задан и сокет есть (сессия xfce-wl даёт wayland-1), иначе wayland-0 (wlcomp напрямую).
+# Лог: $PREFIX/tmp/claude-desktop.log
+P=${PREFIX:-/data/data/com.termux/files/usr}; F=$P/glibc/shim/fhs-run; LOG=$P/tmp/claude-desktop.log
+# Без обработки SIGSYS в glibc-шиме Android убивает Electron на openat2 сразу после старта (окно не появляется). GodRuntime при старте Termux
+# восстанавливает шим из APK, поэтому проверяем заранее и говорим причину, а не ждём тихого падения.
+grep -q FHS_SIGSYS "$P/glibc/shim/libfhs-glibc.so" 2>/dev/null || {
+  echo "wlclaude: в $P/glibc/shim/libfhs-glibc.so нет обработки SIGSYS (нужна ветка claude/sigsys-enosys, god/fhs/fhs.c): Electron упадёт на openat2." >&2
+  echo "wlclaude: установите шим из этой ветки или пересоберите APK (bash god/build-local.sh). Принудительный запуск: WLCLAUDE_FORCE=1 wlclaude" >&2
+  [ -n "$WLCLAUDE_FORCE" ] || exit 3; }
+export XDG_RUNTIME_DIR=$P/tmp
+D=${WAYLAND_DISPLAY:-wayland-0}; [ -S "$XDG_RUNTIME_DIR/$D" ] || D=wayland-0
+if [ "$D" = wayland-0 ]; then WAYLAND_DISPLAY=wayland-0 wlrun --open >>"$LOG" 2>&1 || { echo "wlclaude: композитор wlcomp не отвечает (см. $LOG)" >&2; exit 1; }; fi
+export WAYLAND_DISPLAY=$D FHS_DEBIAN=1 XDG_DATA_DIRS=/usr/share XDG_CONFIG_DIRS=/etc/xdg NO_AT_BRIDGE=1
+export XDG_CONFIG_HOME=$HOME/.config/god-claude XDG_CACHE_HOME=$HOME/.cache/god-claude
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+# реальный бинарь, не симлинк /usr/bin/claude-desktop: иначе Chromium не найдёт icudtl.dat
+export CLAUDE_BIN=$P/debian/usr/lib/claude-desktop/claude-desktop
+export CL_FLAGS="--ozone-platform=wayland --no-sandbox --disable-dev-shm-usage --disable-gpu --password-store=basic --enable-logging=stderr"
+# Сессионная шина dbus БЕЗ активации служб (как в wlchromium): иначе D-Bus запускает xfce4-notifyd, которому нужен wlr-layer-shell, а у нашего
+# композитора его нет, и на экране появляется окно «Unable to start notification daemon».
+DBCONF=$P/tmp/wlclaude-dbus.conf
+cat > "$DBCONF" <<EOF2
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig><type>session</type><listen>unix:tmpdir=$P/tmp</listen><auth>EXTERNAL</auth>
+<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/></policy></busconfig>
+EOF2
+echo "=== $(date '+%F %T') wlclaude: display=$D" >>"$LOG"
+exec "$F" "$P/bin/sh" -c "exec dbus-run-session --config-file=$DBCONF -- \$CLAUDE_BIN \$CL_FLAGS \"\$@\"" sh "$@" >>"$LOG" 2>&1

@@ -85,7 +85,10 @@ description: "Управление окружением god-termux (форк Ter
 
 - Шим: `FHS_TRACE=1` (показывает подмены путей), `FHS_DEBUG=1`, `FHS_OFF=1` (выключить), `FHS_FAST_OFF=1`, `FHS_SUP_STATS=ФАЙЛ`.
 - Проверка шима при старте: `cd $PREFIX/glibc/shim && sha256sum -c SHA256SUMS`.
-- Код выхода 159 (SIGSYS) у Electron/Chromium: вероятно, Android seccomp запретил системный вызов. Подтверждай через `logcat` или strace, не гадай.
+- Код выхода 159 (SIGSYS) у Electron/Chromium: Android seccomp убивает процесс за запрещённый системный вызов. Номер вызова лежит в дампе Crashpad (`<XDG_CONFIG_HOME>/Claude/Crashpad/completed/*.dmp`, поток исключения, код 31, первый параметр = номер syscall; на arm64 437 = `openat2`). Шим (ветка `claude/sigsys-enosys`, `fhs.c`, glibc-вариант) превращает SIGSYS в `ENOSYS` и подавляет чужие `sigaction(SIGSYS)`; `FHS_SIGSYS_LOG=1` печатает номера, `FHS_SIGSYS=0` выключает. Тест: `god/tests/fhs/sigsys.c`.
+- Шим с обработкой SIGSYS ставится вручную и **откатывается при каждом старте Termux** (`GodRuntime` восстанавливает шим из APK): пересобери и поставь заново (`aarch64-linux-gnu-gcc -shared -fPIC -O2 -DGLIBC_BUILD -fuse-ld=bfd -o libfhs-glibc.so god/fhs/fhs.c -ldl`, подмена файла в `$PREFIX/glibc/shim`, пересчёт `SHA256SUMS` теми же именами) или пересобери APK. Регрессионный тест: `python3 god/tests/fhs/sigsys.py`.
+- Запуск Claude Desktop: `wlclaude` (`god/runtime/wlclaude`, ярлык `~/Desktop/claude-desktop.desktop`). Бинарь только по реальному пути `$PREFIX/debian/usr/lib/claude-desktop/claude-desktop`: через симлинк `/usr/bin/claude-desktop` Chromium не находит `icudtl.dat` («Invalid file descriptor to ICU data»). Лог: `$PREFIX/tmp/claude-desktop.log`, логи приложения: `~/.config/god-claude/Claude/logs/main.log`.
+- Тесты, которым нужен процесс без шима: запускай через `/system/bin/linker64 $PREFIX/bin/env ...`. Обычный `env` внутри сессии несёт шим и при `execve` подменяет твой `LD_PRELOAD` на установленный.
 - Экран: `mcp__god-ui__screenshot`, `ui_tree`, `logcat` (нужен adb). Скриншот может показать твой же терминал вместо окна приложения: проверь, что окно композитора действительно открыто.
 - Тесты шима: `python3 god/tests/fhs/run.py`, `dapt.py`, `paths.py`, `fast.py`, `refresh.py` (временные каталоги, реальный apt не запускают).
 
